@@ -72,7 +72,16 @@ export const parseYamlToModel = parseDslToModel;
 
 /** Take any (parsed or raw) shape and produce the normalized in-memory model. */
 export function normalize(parsed) {
-  const meta = { prompt: "", positions: {}, ...(parsed.meta || {}) };
+  const meta = { prompt: "", positions: {}, notes: [], ...(parsed.meta || {}) };
+  // notes is an annotation layer over the canvas — text, position,
+  // optional id. Normalised here so the canvas + serializer don't have
+  // to defensively guard each field downstream.
+  meta.notes = (meta.notes || []).map((n, i) => ({
+    id:   String(n.id || `note-${i}-${Date.now()}`),
+    text: String(n.text || ""),
+    x:    Number.isFinite(n.x) ? Number(n.x) : 100 + i * 24,
+    y:    Number.isFinite(n.y) ? Number(n.y) : 100 + i * 24,
+  }));
   return {
     name:        parsed.name || "untitled",
     description: parsed.description || "",
@@ -127,6 +136,19 @@ export function serializeModelToDsl(model) {
   if (model.meta?.prompt) meta.prompt = model.meta.prompt;
   if (model.meta?.positions && Object.keys(model.meta.positions).length) {
     meta.positions = model.meta.positions;
+  }
+  if (Array.isArray(model.meta?.notes) && model.meta.notes.length) {
+    // Only include notes that actually have content — empty ones the
+    // user dropped and abandoned shouldn't pollute the saved DSL.
+    const kept = model.meta.notes
+      .filter(n => n && (String(n.text || "").trim() !== ""))
+      .map(n => ({
+        id:   String(n.id),
+        text: String(n.text || ""),
+        x:    Math.round(Number(n.x) || 0),
+        y:    Math.round(Number(n.y) || 0),
+      }));
+    if (kept.length) meta.notes = kept;
   }
   if (Object.keys(meta).length) out.meta = meta;
 

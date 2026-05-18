@@ -1,7 +1,7 @@
 {
   "name":    "Daisy-workflow Official",
   "version": "1",
-  "description": "Local-disk fallback catalog. Used by the marketplace browser in the Plugins admin page when PLUGIN_CATALOG_URL is not set. Mirror the schema below in any remote catalog you publish.",
+  "description": "Local-disk fallback catalog. The default catalog source is the hosted https://daisy-workflow.web.app/plugin-catalog.json — this file is only used if that URL is unreachable, or if PLUGIN_CATALOG_FILE points to it explicitly (useful for air-gapped deployments). Mirror the schema below in any remote catalog you publish.",
 
   "plugins": [
     {

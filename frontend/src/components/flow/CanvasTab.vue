@@ -41,11 +41,21 @@
               </q-tooltip>
             </q-icon>
           </ControlButton>
+          <ControlButton @click="onAddNote">
+            <q-icon name="sticky_note_2" style="color:black">
+              <q-tooltip anchor="center right" self="center left" :offset="[10, 10]">
+                Add note
+              </q-tooltip>
+            </q-icon>
+          </ControlButton>
         </Controls>
         <MiniMap pannable zoomable />
 
         <template #node-plugin="props">
           <PluginNode v-bind="props" />
+        </template>
+        <template #node-note="props">
+          <NoteNode v-bind="props" />
         </template>
       </VueFlow>
     </div>
@@ -70,7 +80,19 @@
       </q-toolbar>
 
       <q-scroll-area class="col">
-        <component v-if="selectedNode" :is="PluginPropertyPanel" :node="selectedNode" @update="onUpdateNodeData" />
+        <template v-if="selectedNode?.type === 'note'">
+          <div class="q-pa-md text-caption text-grey">
+            <q-icon name="sticky_note_2" size="16px" class="q-mr-xs" />
+            Note selected. Double-click the note on the canvas to edit
+            its text. Use the delete button above to remove it.
+          </div>
+        </template>
+        <component
+          v-else-if="selectedNode"
+          :is="PluginPropertyPanel"
+          :node="selectedNode"
+          @update="onUpdateNodeData"
+        />
         <div v-else class="q-pa-md text-caption text-grey">
           Click a node on the canvas to edit its properties, or pick a plugin from
           the left palette to add one.
@@ -95,6 +117,7 @@ import { MiniMap } from "@vue-flow/minimap";
 import NodePalette from "./NodePalette.vue";
 import PluginNode from "./nodes/PluginNode.vue";
 import PluginPropertyPanel from "./nodes/PluginPropertyPanel.vue";
+import NoteNode from "./nodes/NoteNode.vue";
 import { buildNodeRegistry } from "./NodeRegistry.js";
 
 const props = defineProps({
@@ -181,6 +204,35 @@ function onNodeClick({ node }) {
 }
 function onPaneClick() {
   selectedNodeId.value = null;
+}
+
+// ── Notes (sticky-note overlay) ─────────────────────────────────────────────
+// Notes are first-class VueFlow nodes of type "note" but they round-trip
+// through `meta.notes` in the DSL (never through `nodes`/`edges`), so
+// the engine doesn't see them and the workflow's execution stays
+// unaffected. zIndex: -1 keeps them visually beneath plugin nodes
+// without intercepting clicks meant for nodes on top.
+async function onAddNote() {
+  const id = (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? `note-${crypto.randomUUID()}`
+    : `note-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  // Drop the note near the centre of the current viewport. Without a
+  // viewport-aware placement the note can land off-screen on a
+  // panned/zoomed canvas. The 60 + slight per-note offset keeps
+  // successive notes from stacking on top of each other.
+  const offset = nodes.value.filter(n => n.type === "note").length * 18;
+  addNodes([{
+    id,
+    type:        "note",
+    position:    { x: 80 + offset, y: 60 + offset },
+    data:        { text: "" },
+    zIndex:      -1,
+    selectable:  true,
+    draggable:   true,
+  }]);
+  selectedNodeId.value = id;
+  await nextTick();
+  extractAndEmit();
 }
 
 // ── Palette → addNodes ──────────────────────────────────────────────────────
@@ -271,6 +323,20 @@ function applyModel(model) {
     target: nameToId.get(e.to) || e.to,
   }));
 
+  // Notes ride alongside plugin nodes in VueFlow's `nodes` array but
+  // come from `meta.notes` rather than `model.nodes` (they're not part
+  // of the DAG). zIndex: -1 keeps them visually behind plugin nodes.
+  const noteNodes = (model.meta?.notes || []).map(n => ({
+    id:         String(n.id),
+    type:       "note",
+    position:   { x: Number(n.x) || 0, y: Number(n.y) || 0 },
+    data:       { text: String(n.text || "") },
+    zIndex:     -1,
+    selectable: true,
+    draggable:  true,
+  }));
+  newNodes.push(...noteNodes);
+
   nodes.value = newNodes;
   edges.value = newEdges;
   selectedNodeId.value = null;
@@ -299,18 +365,30 @@ function extractAndEmit() {
   // Cancel any pending debounce — we're emitting now.
   if (extractTimer) { clearTimeout(extractTimer); extractTimer = null; }
 
-  // Build the canvas-side patch of model.
+  // Build the canvas-side patch of model. Walk the VueFlow nodes once
+  // and bucket by type: plugin → model.nodes (with positions), note →
+  // meta.notes (text + x/y). Anything else gets dropped.
   const idToName = new Map();
   const positions = {};
-  const out = {};
-  const newNodes = nodes.value.map(n => {
+  const newNodes  = [];
+  const newNotes  = [];
+  for (const n of nodes.value) {
+    if (n.type === "note") {
+      newNotes.push({
+        id:   String(n.id),
+        text: String(n.data?.text || ""),
+        x:    Math.round(n.position?.x ?? 0),
+        y:    Math.round(n.position?.y ?? 0),
+      });
+      continue;
+    }
     const dagName = (n.data?.name || `node-${n.id}`).trim();
     idToName.set(n.id, dagName);
     positions[dagName] = {
       x: Math.round(n.position?.x ?? 0),
       y: Math.round(n.position?.y ?? 0),
     };
-    return {
+    newNodes.push({
       name: dagName,
       action: n.data?.action || "",
       description: n.data?.description || "",
@@ -322,8 +400,8 @@ function extractAndEmit() {
       onError: n.data?.onError || "terminate",
       batchOver: n.data?.batchOver || "",
       outputVar: n.data?.outputVar || "",
-    };
-  });
+    });
+  }
   const newEdges = edges.value
     .map(e => ({ from: idToName.get(e.source), to: idToName.get(e.target) }))
     .filter(e => e.from && e.to);
@@ -332,7 +410,11 @@ function extractAndEmit() {
     ...props.modelValue,
     nodes: newNodes,
     edges: newEdges,
-    meta: { ...(props.modelValue.meta || {}), positions },
+    meta: {
+      ...(props.modelValue.meta || {}),
+      positions,
+      notes: newNotes,
+    },
   });
 }
 
@@ -342,10 +424,12 @@ let lastSeenModelRef = null;
 watch(() => props.modelValue, (m) => {
   if (m === lastSeenModelRef) return;
   lastSeenModelRef = m;
-  // Only reapply when the new model is structurally different from what's on
-  // the canvas right now (a no-op when WE were the source of the change).
-  const sameNodeCount = (m.nodes?.length || 0) === nodes.value.length;
-  if (sameNodeCount && nodes.value.length > 0) {
+  // Compare plugin-node counts only — notes live on the canvas via
+  // VueFlow's `nodes` array but come from `meta.notes`, so counting
+  // them here would over-trigger applyModel on every note add/remove.
+  const canvasPluginCount = nodes.value.filter(n => n.type !== "note").length;
+  const sameNodeCount = (m.nodes?.length || 0) === canvasPluginCount;
+  if (sameNodeCount && canvasPluginCount > 0) {
     // assume our local state is already authoritative — skip re-importing
     return;
   }

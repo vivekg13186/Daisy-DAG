@@ -72,6 +72,15 @@
           :pagination="{ rowsPerPage: 0 }"
           hide-bottom
         >
+          <template #body-cell-name="props">
+            <q-td :props="props">
+              <div class="row items-center no-wrap">
+                <PluginIcon :action="props.row.name" size="18px" class="q-mr-sm" />
+                <span class="ellipsis">{{ props.row.name }}</span>
+              </div>
+            </q-td>
+          </template>
+
           <template #body-cell-version="props">
             <q-td :props="props">
               <span>{{ props.row.version }}</span>
@@ -217,7 +226,8 @@
           >
             <q-card flat bordered class="catalog-card">
               <q-card-section>
-                <div class="row items-center no-wrap">
+                <div class="row items-center no-wrap q-gutter-sm">
+                  <PluginIcon :action="p.name" size="28px" />
                   <div class="col">
                     <div class="text-subtitle1 ellipsis">{{ p.name }}</div>
                     <div class="text-caption text-grey-7">v{{ p.version }}</div>
@@ -530,6 +540,7 @@ import { useQuasar, copyToClipboard } from "quasar";
 import { useRoute, useRouter } from "vue-router";
 import { marked } from "marked";
 import { Plugins } from "../api/client.js";
+import PluginIcon from "../components/PluginIcon.vue";
 
 const $q     = useQuasar();
 const route  = useRoute();

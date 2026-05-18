@@ -7,7 +7,7 @@
   <div class="plugin-node" :class="{ selected }">
     <Handle type="target" :position="Position.Left" />
     <div class="row items-center no-wrap">
-      <q-icon :name="iconForAction(data.action)" size="14px" class="q-mr-xs" />
+      <PluginIcon :action="data.action" size="16px" class="q-mr-sm" />
       <div class="col">
         <div class="node-name ellipsis">{{ data.name || "(unnamed)" }}</div>
         <div class="node-action ellipsis">{{ data.action }}</div>
@@ -19,33 +19,13 @@
 
 <script setup>
 import { Handle, Position } from "@vue-flow/core";
+import PluginIcon from "../../PluginIcon.vue";
 
 defineProps({
   id:       { type: String, required: true },
   data:     { type: Object, required: true },
   selected: { type: Boolean, default: false },
 });
-
-// Pick a vaguely appropriate Material icon for each action prefix.
-const ICONS = {
-  http:    "language",
-  web:     "public",
-  sql:     "storage",
-  email:   "mail_outline",
-  file:    "description",
-  csv:     "table_view",
-  excel:   "grid_on",
-  log:     "terminal",
-  delay:   "timer",
-  transform: "transform",
-  condition: "rule",
-  default: "extension",
-};
-function iconForAction(action) {
-  if (!action) return ICONS.default;
-  const prefix = action.split(".")[0];
-  return ICONS[prefix] || ICONS[action] || ICONS.default;
-}
 </script>
 
 <style scoped>

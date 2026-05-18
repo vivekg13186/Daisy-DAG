@@ -2,10 +2,13 @@
 // admins browse from the Plugins page.
 //
 // Source order:
-//   1. process.env.PLUGIN_CATALOG_URL  — remote HTTPS catalog
-//   2. deploy/plugin-catalog.example.json (or PLUGIN_CATALOG_FILE)
-//      — local-disk fallback. Useful for air-gapped deployments
-//      and CI / tests.
+//   1. process.env.PLUGIN_CATALOG_URL  — explicit override (remote HTTPS)
+//   2. process.env.PLUGIN_CATALOG_FILE — explicit override (local file)
+//   3. DEFAULT_CATALOG_URL             — hosted default, used when no
+//                                        env vars are set
+//   4. deploy/plugin-catalog.example.json
+//      — last-resort local fallback if (3) is unreachable. Useful for
+//      air-gapped deployments and CI / tests.
 //
 // Cached in memory for CATALOG_TTL_MS (default 5 min). `?refresh=1`
 // on the endpoint bypasses the cache.
@@ -39,6 +42,11 @@ import { log } from "../utils/logger.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CATALOG_TTL_MS = 5 * 60_000;
 
+// Default hosted catalog. Used when neither PLUGIN_CATALOG_URL nor
+// PLUGIN_CATALOG_FILE is set. Falls back to the bundled local catalog
+// if this URL is unreachable so air-gapped / offline setups still work.
+const DEFAULT_CATALOG_URL = "https://daisy-workflow.web.app/plugin-catalog.json";
+
 let _cache = null;        // { data, fetchedAt, source }
 let _cachedAt = 0;
 
@@ -54,25 +62,43 @@ export async function loadCatalog({ refresh = false } = {}) {
     return _cache;
   }
 
-  const url      = process.env.PLUGIN_CATALOG_URL || null;
-  const filePath = process.env.PLUGIN_CATALOG_FILE
-                || path.resolve(__dirname, "../../../deploy/plugin-catalog.example.json");
+  // Resolution: explicit URL env → explicit FILE env → hosted default
+  // (with a bundled-file safety net if the hosted catalog is offline).
+  const explicitUrl  = process.env.PLUGIN_CATALOG_URL  || null;
+  const explicitFile = process.env.PLUGIN_CATALOG_FILE || null;
+  const bundledFile  = path.resolve(__dirname, "../../../deploy/plugin-catalog.example.json");
 
   let raw;
   let source;
-  if (url) {
-    const r = await fetchWithTimeout(url, 5000);
+  if (explicitUrl) {
+    const r = await fetchWithTimeout(explicitUrl, 5000);
     raw = await r.text();
-    source = url;
+    source = explicitUrl;
+  } else if (explicitFile) {
+    raw = fs.readFileSync(explicitFile, "utf8");
+    source = explicitFile;
   } else {
+    // Default path: try the hosted catalog, fall back to the bundled
+    // local file if the network call fails. This keeps fresh installs
+    // working out-of-the-box while still allowing air-gapped operation.
     try {
-      raw = fs.readFileSync(filePath, "utf8");
-      source = filePath;
-    } catch (e) {
-      log.warn("plugin catalog unavailable", { error: e.message });
-      throw new Error(
-        "Plugin catalog not configured. Set PLUGIN_CATALOG_URL to a remote catalog or place a JSON file at deploy/plugin-catalog.example.json.",
-      );
+      const r = await fetchWithTimeout(DEFAULT_CATALOG_URL, 5000);
+      raw = await r.text();
+      source = DEFAULT_CATALOG_URL;
+    } catch (netErr) {
+      log.warn("default plugin catalog unreachable, falling back to bundled file", {
+        url: DEFAULT_CATALOG_URL, error: netErr.message,
+      });
+      try {
+        raw = fs.readFileSync(bundledFile, "utf8");
+        source = bundledFile;
+      } catch (fileErr) {
+        throw new Error(
+          `Plugin catalog unavailable: hosted default ${DEFAULT_CATALOG_URL} failed ` +
+          `(${netErr.message}) and bundled fallback ${bundledFile} also failed (${fileErr.message}). ` +
+          `Set PLUGIN_CATALOG_URL or PLUGIN_CATALOG_FILE to override.`,
+        );
+      }
     }
   }
 

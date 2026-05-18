@@ -16,12 +16,14 @@
       <q-expansion-item v-for="g in groups" :key="g.prefix" dense dense-toggle default-opened :label="g.prefix"
          header-class="palette-header">
         <q-item v-for="p in g.items" :key="p.name" clickable dense @click="$emit('add', p)" v-ripple>
+          <q-item-section avatar>
+            <PluginIcon :action="p.name" size="18px" />
+          </q-item-section>
           <q-item-section>
             <q-item-label>{{ p.name }}</q-item-label>
-            
           </q-item-section>
           <q-item-section side>
-            <q-icon name="add" size="16px" />
+            <q-icon name="add" size="14px" />
           </q-item-section>
         </q-item>
       </q-expansion-item>
@@ -34,6 +36,7 @@
 
 <script setup>
 import { ref, computed } from "vue";
+import PluginIcon from "../PluginIcon.vue";
 
 const props = defineProps({
   plugins: { type: Array, default: () => [] },

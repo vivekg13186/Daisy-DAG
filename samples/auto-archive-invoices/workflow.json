@@ -1,0 +1,120 @@
+{
+  "name": "Auto-archive payment invoices",
+  "description": "When a new email lands in the configured inbox, an AI agent decides whether it's a payment invoice we received. If yes, the workflow files the email body, a parsed JSON summary, and every attachment into archive/payments/<year>/<month>/<day>/<vendor>/ on local disk. Use as a starting point — point it at your own inbox, swap the agent's prompt to match your accounting categories, and customise the archive path with whatever folder convention your team prefers.",
+  "meta": {
+    "positions": {
+      "classifyEmail": {
+        "x": 100,
+        "y": 60
+      },
+      "guard": {
+        "x": 320,
+        "y": 60
+      },
+      "buildPath": {
+        "x": 530,
+        "y": 97
+      },
+      "saveBody": {
+        "x": 782,
+        "y": 27
+      },
+      "saveMetadata": {
+        "x": 854,
+        "y": 98
+      },
+      "saveAttachments": {
+        "x": 850,
+        "y": 154
+      }
+    }
+  },
+  "data": {
+    "archiveRoot": "/data/archive"
+  },
+  "nodes": [
+    {
+      "name": "classifyEmail",
+      "action": "agent",
+      "description": "Ask the InvoiceClassifier agent (see README) whether this email is a payment invoice and extract the structured fields we'll need to file it.",
+      "inputs": {
+        "agent": "InvoiceClassifier",
+        "input": "Subject: ${input.subject}\nFrom: ${input.from}\nDate: ${input.date}\n\n${input.text}"
+      },
+      "outputVar": "classification"
+    },
+    {
+      "name": "guard",
+      "action": "transform",
+      "description": "Skip the rest of the flow when the classifier says this email is NOT a payment invoice. Downstream nodes cascade-skip via Daisy's executeIf machinery, so non-invoice mail is a no-op end to end.",
+      "inputs": {
+        "expression": "{}"
+      },
+      "executeIf": "${classification.result.isInvoice = true}",
+      "outputVar": "_guard"
+    },
+    {
+      "name": "buildPath",
+      "action": "transform",
+      "description": "Slice the ISO-8601 date string into year/month/day components and sanitise the vendor name for filesystem use. Pure FEEL — no glue node needed.",
+      "inputs": {
+        "expression": "{ year: substring(input.date, 1, 4), month: substring(input.date, 6, 2), day: substring(input.date, 9, 2), vendor: replace(classification.result.vendor, \"[^A-Za-z0-9._-]\", \"_\") }"
+      },
+      "outputVar": "parts"
+    },
+    {
+      "name": "saveBody",
+      "action": "file.write",
+      "description": "Write the email body as a plain-text file in the per-day folder. Daisy creates the parent directories on demand.",
+      "inputs": {
+        "path": "${data.archiveRoot}/payments/${parts.year}/${parts.month}/${parts.day}/${parts.vendor}/email.txt",
+        "content": "From: ${input.from}\nSubject: ${input.subject}\nDate: ${input.date}\n\n${input.text}",
+        "mkdir": true
+      }
+    },
+    {
+      "name": "saveMetadata",
+      "action": "file.write",
+      "description": "Sidecar JSON with the parsed invoice fields — invoice number, amount, currency, paymentDate. Downstream reconciliation jobs can read this without re-parsing the email.",
+      "inputs": {
+        "path": "${data.archiveRoot}/payments/${parts.year}/${parts.month}/${parts.day}/${parts.vendor}/invoice.json",
+        "content": "${toJson(classification.result)}",
+        "mkdir": true
+      }
+    },
+    {
+      "name": "saveAttachments",
+      "action": "file.write",
+      "description": "Fan out one write per attachment. The batch context exposes ${item} (the current attachment) and ${index}. Email attachments come through as base64-encoded content, so we pass encoding=base64 to file.write.",
+      "inputs": {
+        "path": "${data.archiveRoot}/payments/${parts.year}/${parts.month}/${parts.day}/${parts.vendor}/${item.filename}",
+        "content": "${item.content}",
+        "encoding": "base64",
+        "mkdir": true
+      },
+      "batchOver": "${input.attachments}"
+    }
+  ],
+  "edges": [
+    {
+      "from": "classifyEmail",
+      "to": "guard"
+    },
+    {
+      "from": "guard",
+      "to": "buildPath"
+    },
+    {
+      "from": "buildPath",
+      "to": "saveBody"
+    },
+    {
+      "from": "buildPath",
+      "to": "saveMetadata"
+    },
+    {
+      "from": "buildPath",
+      "to": "saveAttachments"
+    }
+  ]
+}
