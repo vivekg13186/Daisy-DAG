@@ -149,14 +149,16 @@
           @delete-selected="onDeleteSelectedConfigs"
         />
 
-        <!-- Instances — every role sees executions list ────────────── -->
+        <!-- Instances — every role sees the list; only admins can delete. -->
         <AppTable
           v-else-if="activeKey === 'instances'"
           :rows="exec_rows"
           :columns="exec_columns"
-          title="Instances"
-          :read-only="true"
+          :title="isAdmin ? 'Instances' : 'Instances (read-only)'"
+          :read-only="!isAdmin"
           @edit="onOpenInstance"
+          @delete="onDeleteInstance"
+          @delete-selected="onDeleteSelectedInstances"
           @refresh="reload"
         />
 
@@ -670,6 +672,61 @@ async function onDeleteSelectedConfigs(rows) {
 
 function onOpenInstance(row) {
   router.push({ name: "instanceViewer", params: { id: row.id } });
+}
+
+// Mirrors onDeleteConfig — admin-only, single-row. The Instances table
+// passes a fully-hydrated row including `status`, so we guard against
+// deleting in-flight executions (matches FlowInspector's isInFlight rule:
+// running, queued, paused, waiting are off-limits).
+async function onDeleteInstance(row) {
+  if (!row?.id) return;
+  if (isInFlightStatus(row.status)) {
+    notify(`Can't delete while still ${row.status}`, "warning");
+    return;
+  }
+  if (!await confirm(`Delete execution ${String(row.id).slice(0, 8)}…? This cannot be undone.`)) return;
+  try {
+    await Executions.remove(row.id);
+    notify(`Deleted execution ${String(row.id).slice(0, 8)}…`, "positive");
+    await reload();
+  } catch (e) {
+    notify(`Delete failed: ${errMsg(e)}`, "negative");
+  }
+}
+
+async function onDeleteSelectedInstances(rows) {
+  if (!rows?.length) return;
+  // Drop in-flight rows up front — same rule the per-row handler enforces.
+  const targets = rows.filter(r => !isInFlightStatus(r.status));
+  const skipped = rows.length - targets.length;
+  if (!targets.length) {
+    notify(`All selected rows are still running — nothing to delete.`, "warning");
+    return;
+  }
+  const msg = skipped
+    ? `Delete ${targets.length} execution(s)? ${skipped} still-running row(s) will be skipped. This cannot be undone.`
+    : `Delete ${targets.length} execution(s)? This cannot be undone.`;
+  if (!await confirm(msg)) return;
+
+  let failed = 0;
+  for (const r of targets) {
+    try { await Executions.remove(r.id); }
+    catch { failed++; }
+  }
+  notify(
+    failed
+      ? `Deleted ${targets.length - failed} of ${targets.length} (${failed} failed)`
+      : `Deleted ${targets.length} execution(s)`,
+    failed ? "warning" : "positive",
+  );
+  await reload();
+}
+
+// Centralised in-flight check — keep in sync with the backend's notion of
+// terminal vs non-terminal status. Anything not in this set is fair game
+// to delete (success, failed, skipped, cancelled, …).
+function isInFlightStatus(status) {
+  return ["running", "queued", "paused", "waiting"].includes(String(status || "").toLowerCase());
 }
 
 // ──────────────────────────────────────────────────────────────────────

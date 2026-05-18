@@ -111,7 +111,7 @@ export default {
   async execute(
     { command, args = [], cwd, env, stdin, shell = false,
       timeoutMs = DEFAULT_TIMEOUT_MS, failOnExitCode = true },
-    _ctx, _hooks, opts = {},
+    _ctx, hooks, opts = {},
   ) {
     if (!command || typeof command !== "string") {
       throw new Error("`command` is required");
@@ -157,6 +157,17 @@ export default {
 
     const started = Date.now();
 
+    // Tell the execution log what's about to run. Useful when a failure
+    // turns out to be a CWD or PATH issue and we want to see the exact
+    // shape the spawn was invoked with.
+    if (hooks?.stream?.log) {
+      hooks.stream.log("info",
+        `shell.exec: ${command}${args.length ? " " + args.join(" ") : ""}` +
+        (cwd ? ` (cwd=${cwd})` : "") +
+        (shell ? " [shell=true]" : ""),
+      );
+    }
+
     return new Promise((resolve, reject) => {
       let child;
       try {
@@ -186,6 +197,13 @@ export default {
       let stderrOverflow = false;
 
       child.stdout.on("data", (chunk) => {
+        // Stream the raw text live so it shows in the InstanceViewer
+        // before the process exits — useful for long-running commands
+        // (npm install / docker build / etc.) where waiting on exit to
+        // surface output makes debugging painful.
+        if (hooks?.stream?.text) {
+          try { hooks.stream.text(chunk.toString("utf8")); } catch { /* fine */ }
+        }
         const remaining = MAX_OUTPUT_BYTES - stdout.length;
         if (chunk.length <= remaining) {
           stdout = Buffer.concat([stdout, chunk]);
@@ -197,6 +215,17 @@ export default {
         }
       });
       child.stderr.on("data", (chunk) => {
+        // stderr lands in the log panel as "warn"-level entries so it's
+        // visually distinct from stdout. Splitting per-line keeps each
+        // log entry readable when a single chunk carries many lines.
+        if (hooks?.stream?.log) {
+          const text = chunk.toString("utf8");
+          for (const line of text.split(/\r?\n/)) {
+            if (line.length) {
+              try { hooks.stream.log("warn", line); } catch { /* fine */ }
+            }
+          }
+        }
         const remaining = MAX_OUTPUT_BYTES - stderr.length;
         if (chunk.length <= remaining) {
           stderr = Buffer.concat([stderr, chunk]);
@@ -238,15 +267,14 @@ export default {
         // continuing with truncated output.
         if (signal) {
           const why = ac.signal.reason?.message || `killed by ${signal}`;
-          const err = new Error(`shell.exec ${why}: ${result.stderr.trim().slice(0, 200) || "no stderr"}`);
+          const err = new Error(`shell.exec ${why}: ${tailForError(result.stderr)}`);
           err.result = result;
           return reject(err);
         }
 
         if (failOnExitCode && result.exitCode !== 0) {
           const err = new Error(
-            `shell.exec exited with code ${result.exitCode}: ` +
-            (result.stderr.trim().slice(0, 200) || "no stderr"),
+            `shell.exec exited with code ${result.exitCode}: ${tailForError(result.stderr)}`,
           );
           err.result = result;
           return reject(err);
@@ -275,6 +303,22 @@ function tokenize(line) {
     else                          tokens.push(m[3]);
   }
   return tokens;
+}
+
+// Build the "what went wrong" snippet that lands in the error message.
+// We used to slice to 200 chars — too aggressive: npm + docker errors
+// routinely bury the actual cause 10 lines deep, behind warnings. 8 KB
+// is generous enough to show the full failure for almost every CLI tool
+// while still bounded (Postgres jsonb rows for executions stay sane).
+// We trim from the END of stderr because most CLIs print the actionable
+// error last.
+const ERROR_TAIL_BYTES = 8 * 1024;
+function tailForError(stderr) {
+  const trimmed = (stderr || "").trim();
+  if (!trimmed) return "no stderr";
+  if (trimmed.length <= ERROR_TAIL_BYTES) return trimmed;
+  return "…(showing last " + ERROR_TAIL_BYTES + " bytes)…\n" +
+    trimmed.slice(-ERROR_TAIL_BYTES);
 }
 
 // Turn Node's terse spawn errors into messages that point at the fix.

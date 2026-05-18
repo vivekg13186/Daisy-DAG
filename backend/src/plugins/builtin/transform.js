@@ -10,6 +10,7 @@
 // and we use that value verbatim instead of double-evaluating.
 
 import { evaluate as feelEvaluate } from "feelin";
+import { FEEL_HELPERS } from "../../dsl/expression.js";
 
 export default {
   name: "transform",
@@ -47,7 +48,11 @@ export default {
   async execute({ expression }, ctx) {
     if (typeof expression === "string") {
       try {
-        return { value: feelEvaluate(expression, ctx) };
+        // Splice the same FEEL helpers the rest of the engine uses into
+        // scope so transform expressions can call parseJson()/toJson()/
+        // toJsonPretty() — without this they're unknown identifiers and
+        // feelin silently returns null.
+        return { value: feelEvaluate(expression, { ...FEEL_HELPERS, ...ctx }) };
       } catch (e) {
         throw new Error(`transform: failed to evaluate FEEL expression — ${e.message}`);
       }

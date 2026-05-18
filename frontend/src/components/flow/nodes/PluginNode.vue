@@ -4,8 +4,14 @@
   (set up by NodeRegistry.makeDefaultNode) to draw the card.
 -->
 <template>
+  <!--
+    Handles are rendered explicitly on top + bottom for top-down flow
+    layout. Because we provide our own <Handle> children, VueFlow's
+    `sourcePosition` / `targetPosition` on the node object are ignored —
+    we have to set Position here directly.
+  -->
   <div class="plugin-node" :class="{ selected }">
-    <Handle type="target" :position="Position.Left" />
+    <Handle type="target" :position="Position.Top" />
     <div class="row items-center no-wrap">
       <PluginIcon :action="data.action" size="16px" class="q-mr-sm" />
       <div class="col">
@@ -13,7 +19,7 @@
         <div class="node-action ellipsis">{{ data.action }}</div>
       </div>
     </div>
-    <Handle type="source" :position="Position.Right" />
+    <Handle type="source" :position="Position.Bottom" />
   </div>
 </template>
 

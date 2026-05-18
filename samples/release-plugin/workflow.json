@@ -1,0 +1,197 @@
+{
+  "name": "Release a plugin (npm + Docker)",
+  "description": "Given a git repo URL, clone it, read package.json, publish the package to npm under the @daisy-workflow scope, and build + push a multi-arch Docker image to vivek13186/daisy-<plugin-name>. This is the Daisy-native equivalent of the per-plugin GitHub Actions release pipeline — useful when you want releases coordinated from a single place, or when the plugin repo doesn't have its own CI yet. Trigger via webhook with body { gitUrl, gitRef } or via the Run button in the editor.",
+
+  "meta": {
+    "positions": {
+      "cleanWorkdir":    { "x":  80, "y":  60 },
+      "clone":           { "x": 260, "y":  60 },
+      "readPackageJson": { "x": 460, "y":  60 },
+      "parseMetaRaw":    { "x": 660, "y":  60 },
+      "meta":            { "x": 860, "y":  60 },
+      "installDeps":     { "x": 460, "y": 180 },
+      "npmPublish":      { "x": 660, "y": 180 },
+      "dockerLogin":     { "x": 460, "y": 300 },
+      "ensureBuilder":   { "x": 660, "y": 300 },
+      "dockerBuildPush": { "x": 860, "y": 300 },
+      "cleanup":         { "x": 1080, "y": 180 }
+    }
+  },
+
+  "data": {
+    "gitUrl":    "${if input.gitUrl  = null then \"https://github.com/daisy-workflow/plugin-jira.git\" else input.gitUrl}",
+    "gitRef":    "${if input.gitRef  = null then \"main\" else input.gitRef}",
+    "workdir":   "${if input.workdir = null then \"/tmp/daisy-release\" else input.workdir}",
+    "platforms": "linux/amd64,linux/arm64"
+  },
+
+  "nodes": [
+    {
+      "name": "cleanWorkdir",
+      "action": "shell.exec",
+      "description": "Wipe any leftover working directory from a previous run. Idempotent so re-running the workflow doesn't drag stale state forward.",
+      "inputs": {
+        "command": "rm",
+        "args":    ["-rf", "${workdir}"]
+      },
+      "onError": "continue"
+    },
+
+    {
+      "name": "clone",
+      "action": "git",
+      "description": "Shallow-clone the plugin repo at the requested ref. The git plugin's clone op takes `dir` (not `directory`); we pass an absolute path so the repo lands exactly at ${workdir} regardless of cwd. depth=1 keeps the clone fast — we only need the working tree for publish, not history.",
+      "inputs": {
+        "operation": "clone",
+        "url":       "${gitUrl}",
+        "cwd":       "/tmp",
+        "dir":       "${workdir}",
+        "branch":    "${gitRef}",
+        "depth":     1
+      },
+      "outputVar": "cloneResult"
+    },
+
+    {
+      "name": "readPackageJson",
+      "action": "file.read",
+      "description": "Pull the raw package.json off disk so the next node can extract name + version.",
+      "inputs": {
+        "path": "${workdir}/package.json"
+      },
+      "outputVar": "pkgFile"
+    },
+
+    {
+      "name": "parseMetaRaw",
+      "action": "shell.exec",
+      "description": "Run a tiny node script to derive { name, version, shortName, image } from package.json. Stays in node-land (instead of FEEL string-munging) so the regex-style trim of '@daisy-workflow/' is unambiguous.",
+      "inputs": {
+        "command": "node",
+        "args":    [
+          "-e",
+          "const p = require(process.argv[1]); const short = p.name.replace('@daisy-workflow/', ''); process.stdout.write(JSON.stringify({ name: p.name, version: p.version, shortName: short, image: 'vivek13186/daisy-' + short }));",
+          "${workdir}/package.json"
+        ]
+      },
+      "outputVar": "metaRaw"
+    },
+
+    {
+      "name": "meta",
+      "action": "transform",
+      "description": "Parse the JSON the node script just printed. Trim first because shell.exec preserves trailing newlines.",
+      "inputs": {
+        "expression": "${parseJson(trim(metaRaw.stdout))}"
+      },
+      "outputVar": "meta"
+    },
+
+    {
+      "name": "installDeps",
+      "action": "shell.exec",
+      "description": "Install runtime deps before publish so the published tarball matches what consumers will install.",
+      "inputs": {
+        "command":  "npm",
+        "args":     ["install", "--omit=dev"],
+        "cwd":      "${workdir}",
+        "timeoutMs": 300000
+      }
+    },
+
+    {
+      "name": "npmPublish",
+      "action": "shell.exec",
+      "description": "Publish to the npm registry. Auth via the `npm` workspace config (token field). --access public is required for scoped packages on the free tier; provenance attestation is GHA-only so we don't pass --provenance here.",
+      "inputs": {
+        "command":  "npm",
+        "args":     ["publish", "--access", "public"],
+        "cwd":      "${workdir}",
+        "env": {
+          "NPM_TOKEN":        "${config.npm.token}",
+          "NPM_CONFIG_TOKEN": "${config.npm.token}",
+          "NPM_CONFIG__AUTH": "${config.npm.token}"
+        },
+        "timeoutMs": 180000
+      }
+    },
+
+    {
+      "name": "dockerLogin",
+      "action": "shell.exec",
+      "description": "Log in to Docker Hub. Pipe the token via stdin (not argv) so it never shows up in `ps` output. Auth via the `dockerhub` workspace config.",
+      "inputs": {
+        "command":  "docker",
+        "args":     ["login", "--username", "${config.dockerhub.username}", "--password-stdin"],
+        "stdin":    "${config.dockerhub.token}",
+        "timeoutMs": 30000
+      }
+    },
+
+    {
+      "name": "ensureBuilder",
+      "action": "shell.exec",
+      "description": "Create (or re-use) a buildx builder that supports multi-arch. The docker-container driver is required for cross-platform builds; the default docker driver only builds for the host arch. onError=continue tolerates the case where the builder already exists.",
+      "inputs": {
+        "command": "/bin/sh",
+        "args":    [
+          "-c",
+          "docker buildx inspect daisy-release-builder >/dev/null 2>&1 || docker buildx create --name daisy-release-builder --driver docker-container --use; docker buildx use daisy-release-builder; docker buildx inspect --bootstrap"
+        ],
+        "timeoutMs": 120000
+      },
+      "onError": "continue"
+    },
+
+    {
+      "name": "dockerBuildPush",
+      "action": "shell.exec",
+      "description": "Multi-arch build + push. Tags :<version> AND :latest, with OCI labels so the image self-describes on Docker Hub.",
+      "inputs": {
+        "command":  "docker",
+        "args": [
+          "buildx", "build",
+          "--platform", "${platforms}",
+          "--tag",      "${meta.image + \":\" + meta.version}",
+          "--tag",      "${meta.image + \":latest\"}",
+          "--label",    "org.opencontainers.image.title=${meta.name}",
+          "--label",    "org.opencontainers.image.version=${meta.version}",
+          "--label",    "org.opencontainers.image.source=${gitUrl}",
+          "--label",    "org.opencontainers.image.licenses=MIT",
+          "--push",
+          "."
+        ],
+        "cwd":       "${workdir}",
+        "timeoutMs": 900000
+      }
+    },
+
+    {
+      "name": "cleanup",
+      "action": "shell.exec",
+      "description": "Best-effort wipe of the cloned working tree. onError=continue so a release isn't marked failed by a stray cleanup glitch.",
+      "inputs": {
+        "command": "rm",
+        "args":    ["-rf", "${workdir}"]
+      },
+      "onError": "continue"
+    }
+  ],
+
+  "edges": [
+    { "from": "cleanWorkdir",    "to": "clone" },
+    { "from": "clone",           "to": "readPackageJson" },
+    { "from": "readPackageJson", "to": "parseMetaRaw" },
+    { "from": "parseMetaRaw",    "to": "meta" },
+
+    { "from": "meta",            "to": "installDeps" },
+    { "from": "installDeps",     "to": "npmPublish" },
+
+    { "from": "meta",            "to": "dockerLogin" },
+    { "from": "dockerLogin",     "to": "ensureBuilder" },
+    { "from": "ensureBuilder",   "to": "dockerBuildPush" },
+
+    { "from": "npmPublish",      "to": "cleanup" },
+    { "from": "dockerBuildPush", "to": "cleanup" }
+  ]
+}

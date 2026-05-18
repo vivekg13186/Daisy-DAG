@@ -34,7 +34,10 @@ import { evaluate as feelEvaluate } from "feelin";
 // They live under names that don't clash with FEEL keywords or user vars
 // (FEEL identifiers are lowercase-camel-friendly), so they shouldn't
 // shadow ctx keys in practice.
-const FEEL_HELPERS = Object.freeze({
+// Exported so other call-sites that hand strings to feelin directly
+// (notably the `transform` plugin) can splice the same helper functions
+// into their scope — keeps the FEEL dialect identical everywhere.
+export const FEEL_HELPERS = Object.freeze({
   toJson: (v) => {
     try { return JSON.stringify(v); }
     catch { return null; }

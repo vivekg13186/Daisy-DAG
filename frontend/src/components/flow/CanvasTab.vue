@@ -48,6 +48,17 @@
               </q-tooltip>
             </q-icon>
           </ControlButton>
+          <!-- Auto-layout: runs the same dagre TB pass that powers the
+               InstanceViewer's GraphView so the editor and run-view stay
+               visually consistent. Notes are excluded from the rank
+               graph and re-overlaid at their previous positions. -->
+          <ControlButton @click="onFormat">
+            <q-icon name="account_tree" style="color:black">
+              <q-tooltip anchor="center right" self="center left" :offset="[10, 10]">
+                Format (auto-layout top-down)
+              </q-tooltip>
+            </q-icon>
+          </ControlButton>
         </Controls>
         <MiniMap pannable zoomable />
 
@@ -119,6 +130,7 @@ import PluginNode from "./nodes/PluginNode.vue";
 import PluginPropertyPanel from "./nodes/PluginPropertyPanel.vue";
 import NoteNode from "./nodes/NoteNode.vue";
 import { buildNodeRegistry } from "./NodeRegistry.js";
+import { useLayout } from "../useLayout.js";
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -259,6 +271,35 @@ async function onAddPlugin(plugin) {
   extractAndEmit();
 }
 
+// ── Auto-layout ─────────────────────────────────────────────────────────────
+// Runs the same dagre top-down (TB) pass GraphView uses on the
+// InstanceViewer, so the editor and the run view stay visually consistent.
+//
+// Note nodes are deliberately excluded from the rank graph: dagre would
+// treat them as floating roots and push them somewhere awkward. We
+// re-attach them at their existing positions so user annotations don't
+// jump around when the rest of the canvas snaps.
+const { layout } = useLayout();
+function onFormat() {
+  const pluginNodes = nodes.value.filter(n => n.type !== "note");
+  const noteNodes   = nodes.value.filter(n => n.type === "note");
+  if (!pluginNodes.length) return;
+
+  const laidOut = layout(pluginNodes, edges.value, "TB");
+  // Preserve user-set selection / dimensions on each touched node by
+  // merging the new position into the original object rather than
+  // taking dagre's shape wholesale.
+  const byId = new Map(laidOut.map(n => [n.id, n]));
+  nodes.value = [
+    ...pluginNodes.map(n => byId.get(n.id) ? { ...n, position: byId.get(n.id).position } : n),
+    ...noteNodes,
+  ];
+  // Flush positions into the model so a save right after Format
+  // captures them — extractAndEmit reads node.position back into
+  // meta.positions.
+  scheduleExtract();
+}
+
 // ── Property panel updates → updateNode ─────────────────────────────────────
 // Property edits fire per-keystroke from the right pane; debounce them.
 function onUpdateNodeData(newData) {
@@ -298,8 +339,11 @@ function applyModel(model) {
     return {
       id,
       type: "plugin",
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
+      // Top-down orientation: each node's source handle sits on its
+      // bottom edge, target on its top. Matches the InstanceViewer's
+      // dagre "TB" layout so saved positions read naturally there too.
+      sourcePosition: Position.Bottom,
+      targetPosition: Position.Top,
       position: { x: pos.x, y: pos.y },
       data: {
         action: n.action,
