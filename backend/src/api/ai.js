@@ -67,6 +67,11 @@ import { syncTrigger } from "../triggers/manager.js";
 import { ValidationError, HttpError } from "../utils/errors.js";
 import { requireUser, requireRole } from "../middleware/auth.js";
 import { limiters } from "../middleware/rateLimit.js";
+import {
+  getWorkspaceAiConfig,
+  setWorkspaceAiSettings,
+  clearWorkspaceAiSettings,
+} from "../workspaces/aiSettings.js";
 
 const router = Router();
 
@@ -76,30 +81,97 @@ const router = Router();
 // each tool implementation via the `ctx` object passed to runAgentLoop.
 router.use(requireUser);
 
-router.get("/status", requireRole("admin", "editor", "viewer"), (_req, res) => {
-  const k = config.ai.apiKey;
-  const expectedPrefix = config.ai.provider === "anthropic" ? "sk-ant-" : "sk-";
-  const warnings = [];
+router.get("/status", requireRole("admin", "editor", "viewer"), async (req, res, next) => {
+  try {
+    const aiCfg = await getWorkspaceAiConfig(req.user.workspaceId);
+    const k     = aiCfg.apiKey;
+    const expectedPrefix = aiCfg.provider === "anthropic" ? "sk-ant-" : "sk-";
+    const warnings = [];
 
-  if (k && k.length !== config.ai.rawKeyLen) {
-    warnings.push(`stripped ${config.ai.rawKeyLen - k.length} whitespace/quote char(s) from the env value`);
-  }
-  if (k && !k.startsWith(expectedPrefix)) {
-    warnings.push(`provider=${config.ai.provider} but key does not start with "${expectedPrefix}"`);
-  }
-  if (k && k.length < 20) {
-    warnings.push(`key looks too short (${k.length} chars)`);
-  }
+    if (aiCfg.source === "env") {
+      // Env-var diagnostics (whitespace stripping etc.) only apply when the
+      // key came from the environment, not when it was saved through the UI.
+      if (k && k.length !== config.ai.rawKeyLen) {
+        warnings.push(`stripped ${config.ai.rawKeyLen - k.length} whitespace/quote char(s) from the env value`);
+      }
+    }
+    if (k && !k.startsWith(expectedPrefix)) {
+      warnings.push(`provider=${aiCfg.provider} but key does not start with "${expectedPrefix}"`);
+    }
+    if (k && k.length < 20) {
+      warnings.push(`key looks too short (${k.length} chars)`);
+    }
 
-  res.json({
-    configured: Boolean(k),
-    provider:   config.ai.provider,
-    model:      config.ai.model,
-    baseUrl:    config.ai.baseUrl,
-    keyPreview: k ? `${k.slice(0, 8)}…${k.slice(-4)} (${k.length} chars)` : null,
-    warnings,
-  });
+    res.json({
+      configured: Boolean(k),
+      provider:   aiCfg.provider,
+      model:      aiCfg.model,
+      baseUrl:    aiCfg.baseUrl,
+      source:     aiCfg.source,
+      keyPreview: k ? `${k.slice(0, 8)}…${k.slice(-4)} (${k.length} chars)` : null,
+      warnings,
+    });
+  } catch (e) { next(e); }
 });
+
+// ── GET /ai/settings — return current workspace AI settings (key masked) ──────
+router.get("/settings", requireRole("admin"), async (req, res, next) => {
+  try {
+    const aiCfg = await getWorkspaceAiConfig(req.user.workspaceId);
+    res.json({
+      source:     aiCfg.source,
+      provider:   aiCfg.provider,
+      model:      aiCfg.model,
+      baseUrl:    aiCfg.baseUrl,
+      configured: Boolean(aiCfg.apiKey),
+      keyPreview: aiCfg.apiKey
+        ? `${aiCfg.apiKey.slice(0, 8)}…${aiCfg.apiKey.slice(-4)} (${aiCfg.apiKey.length} chars)`
+        : null,
+      // Return separately what is overridden in the DB so the form can pre-fill.
+      dbOverrides: await _getDbOverrides(req.user.workspaceId),
+    });
+  } catch (e) { next(e); }
+});
+
+// ── PUT /ai/settings — save API key + optional overrides (admin only) ─────────
+router.put("/settings", requireRole("admin"), async (req, res, next) => {
+  try {
+    const { provider, apiKey, model, baseUrl } = req.body || {};
+    if (!apiKey?.trim() && !provider && !model && !baseUrl) {
+      throw new ValidationError("Provide at least one field to update (apiKey, provider, model, or baseUrl)");
+    }
+    await setWorkspaceAiSettings(req.user.workspaceId, {
+      provider: provider?.trim() || undefined,
+      apiKey:   apiKey?.trim()   || undefined,
+      model:    model?.trim()    || undefined,
+      baseUrl:  baseUrl?.trim()  || undefined,
+    });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── DELETE /ai/settings — remove DB-stored settings, revert to env vars ───────
+router.delete("/settings", requireRole("admin"), async (req, res, next) => {
+  try {
+    await clearWorkspaceAiSettings(req.user.workspaceId);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+/** Read the raw (non-decrypted) overrides stored in the DB for the settings form. */
+async function _getDbOverrides(workspaceId) {
+  const row = await pool.query(
+    "SELECT ai_settings FROM workspaces WHERE id = $1",
+    [workspaceId],
+  ).then(r => r.rows[0]);
+  const s = row?.ai_settings || {};
+  return {
+    provider:   s.provider  || null,
+    model:      s.model     || null,
+    baseUrl:    s.base_url  || null,
+    hasApiKey:  Boolean(s.api_key_enc),
+  };
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // /chat — the legacy single-shot endpoint. Still wired up so older clients
@@ -111,9 +183,10 @@ router.post("/chat", limiters.ai, requireRole("admin", "editor"), async (req, re
     if (!Array.isArray(messages) || messages.length === 0) {
       throw new ValidationError("`messages` array required");
     }
-    if (!config.ai.apiKey) {
+    const aiCfg = await getWorkspaceAiConfig(req.user.workspaceId);
+    if (!aiCfg.apiKey) {
       throw new HttpError(503, "AI_NOT_CONFIGURED",
-        "AI is not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in the backend env.");
+        "AI is not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in the backend env, or save a key in Admin → Workspace.");
     }
 
     const cleanMessages = messages
@@ -122,7 +195,7 @@ router.post("/chat", limiters.ai, requireRole("admin", "editor"), async (req, re
     if (cleanMessages.length === 0) throw new ValidationError("no valid messages");
 
     const system = buildSystemPrompt({ agentMode: false });
-    const text = await callPlainLlm(system, cleanMessages);
+    const text = await callPlainLlm(system, cleanMessages, aiCfg);
     res.json({ message: { role: "assistant", content: text } });
   } catch (e) { next(e); }
 });
@@ -138,9 +211,10 @@ router.post("/agent/chat", limiters.ai, requireRole("admin", "editor"), async (r
     if (!Array.isArray(messages) || messages.length === 0) {
       throw new ValidationError("`messages` array required");
     }
-    if (!config.ai.apiKey) {
+    const aiCfg = await getWorkspaceAiConfig(req.user.workspaceId);
+    if (!aiCfg.apiKey) {
       throw new HttpError(503, "AI_NOT_CONFIGURED",
-        "AI is not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in the backend env.");
+        "AI is not configured. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in the backend env, or save a key in Admin → Workspace.");
     }
 
     const cleanMessages = messages
@@ -179,7 +253,7 @@ router.post("/agent/chat", limiters.ai, requireRole("admin", "editor"), async (r
     };
 
     const system = buildSystemPrompt({ agentMode: true, ctx });
-    const finalText = await runAgentLoop({ system, messages: cleanMessages, ctx });
+    const finalText = await runAgentLoop({ system, messages: cleanMessages, ctx, aiCfg });
 
     res.json({
       message:          { role: "assistant", content: finalText },
@@ -783,32 +857,32 @@ function toolRequestPlugin(input, ctx) {
 
 const MAX_TOOL_TURNS = 8;
 
-async function runAgentLoop({ system, messages, ctx }) {
-  if (config.ai.provider === "anthropic") {
-    return runAnthropicAgent({ system, messages, ctx });
+async function runAgentLoop({ system, messages, ctx, aiCfg }) {
+  if (aiCfg.provider === "anthropic") {
+    return runAnthropicAgent({ system, messages, ctx, aiCfg });
   }
-  return runOpenAIAgent({ system, messages, ctx });
+  return runOpenAIAgent({ system, messages, ctx, aiCfg });
 }
 
 // -------- plain (non-tool) calls used by /chat --------
 
-async function callPlainLlm(system, messages) {
-  if (config.ai.provider === "anthropic") return callAnthropicPlain(system, messages);
-  return callOpenAIPlain(system, messages);
+async function callPlainLlm(system, messages, aiCfg) {
+  if (aiCfg.provider === "anthropic") return callAnthropicPlain(system, messages, aiCfg);
+  return callOpenAIPlain(system, messages, aiCfg);
 }
 
-async function callOpenAIPlain(system, messages) {
-  const url = `${config.ai.baseUrl.replace(/\/$/, "")}/chat/completions`;
+async function callOpenAIPlain(system, messages, aiCfg) {
+  const url = `${aiCfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "authorization": `Bearer ${config.ai.apiKey}`,
+      "authorization": `Bearer ${aiCfg.apiKey}`,
     },
     body: JSON.stringify({
-      model: config.ai.model,
+      model: aiCfg.model,
       messages: [{ role: "system", content: system }, ...messages],
-      max_tokens: config.ai.maxTokens,
+      max_tokens: aiCfg.maxTokens,
       temperature: 0.3,
     }),
   });
@@ -820,25 +894,25 @@ async function callOpenAIPlain(system, messages) {
   return data?.choices?.[0]?.message?.content || "";
 }
 
-async function callAnthropicPlain(system, messages) {
-  const url = `${config.ai.baseUrl.replace(/\/$/, "")}/messages`;
+async function callAnthropicPlain(system, messages, aiCfg) {
+  const url = `${aiCfg.baseUrl.replace(/\/$/, "")}/messages`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "x-api-key": config.ai.apiKey,
+      "x-api-key": aiCfg.apiKey,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: config.ai.model,
-      max_tokens: config.ai.maxTokens,
+      model: aiCfg.model,
+      max_tokens: aiCfg.maxTokens,
       system,
       messages,
     }),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new HttpError(res.status, "AI_ERROR", anthropicErrHint(res.status, txt));
+    throw new HttpError(res.status, "AI_ERROR", anthropicErrHint(res.status, txt, aiCfg));
   }
   const data = await res.json();
   const blocks = Array.isArray(data?.content) ? data.content : [];
@@ -847,8 +921,8 @@ async function callAnthropicPlain(system, messages) {
 
 // -------- Anthropic agent loop --------
 
-async function runAnthropicAgent({ system, messages, ctx }) {
-  const url = `${config.ai.baseUrl.replace(/\/$/, "")}/messages`;
+async function runAnthropicAgent({ system, messages, ctx, aiCfg }) {
+  const url = `${aiCfg.baseUrl.replace(/\/$/, "")}/messages`;
   // Anthropic messages can carry mixed content blocks; build them from our
   // {role, content} pairs (content is plain text from the user-facing chat).
   const conversation = messages.map(m => ({
@@ -861,12 +935,12 @@ async function runAnthropicAgent({ system, messages, ctx }) {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-api-key": config.ai.apiKey,
+        "x-api-key": aiCfg.apiKey,
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model:       config.ai.model,
-        max_tokens:  config.ai.maxTokens,
+        model:       aiCfg.model,
+        max_tokens:  aiCfg.maxTokens,
         system,
         tools:       TOOL_DEFS,
         messages:    conversation,
@@ -913,8 +987,8 @@ async function runAnthropicAgent({ system, messages, ctx }) {
 // -------- OpenAI agent loop (works with any chat-completions-compatible
 // provider that supports tool calls). --------
 
-async function runOpenAIAgent({ system, messages, ctx }) {
-  const url = `${config.ai.baseUrl.replace(/\/$/, "")}/chat/completions`;
+async function runOpenAIAgent({ system, messages, ctx, aiCfg }) {
+  const url = `${aiCfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const conversation = [
     { role: "system", content: system },
     ...messages.map(m => ({ role: m.role, content: m.content })),
@@ -929,14 +1003,14 @@ async function runOpenAIAgent({ system, messages, ctx }) {
       method: "POST",
       headers: {
         "content-type":  "application/json",
-        "authorization": `Bearer ${config.ai.apiKey}`,
+        "authorization": `Bearer ${aiCfg.apiKey}`,
       },
       body: JSON.stringify({
-        model:       config.ai.model,
+        model:       aiCfg.model,
         messages:    conversation,
         tools,
         tool_choice: "auto",
-        max_tokens:  config.ai.maxTokens,
+        max_tokens:  aiCfg.maxTokens,
         temperature: 0.3,
       }),
     });
@@ -992,15 +1066,15 @@ function summariseResult(name, result) {
   return "ok";
 }
 
-function anthropicErrHint(status, txt) {
+function anthropicErrHint(status, txt, aiCfg) {
   let hint = "";
   if (status === 401) {
-    const k = config.ai.apiKey;
+    const k = aiCfg?.apiKey || config.ai.apiKey;
     const masked = k ? `${k.slice(0, 8)}…${k.slice(-4)} (${k.length} chars)` : "(none)";
     const prefixWrong = k && !k.startsWith("sk-ant-");
     hint = ` — server received key ${masked}.` +
       (prefixWrong ? " The key does not start with sk-ant-, which Anthropic requires." : "") +
-      " Common causes: trailing whitespace in .env, wrong key copied (OpenAI vs Anthropic), or revoked key. Check GET /ai/status.";
+      " Common causes: trailing whitespace, wrong key copied (OpenAI vs Anthropic), or revoked key. Check GET /ai/status.";
   }
   return `Anthropic: ${status} ${String(txt).slice(0, 500)}${hint}`;
 }

@@ -10,7 +10,7 @@
     `sourcePosition` / `targetPosition` on the node object are ignored —
     we have to set Position here directly.
   -->
-  <div class="plugin-node" :class="{ selected }">
+  <div class="plugin-node" :class="{ selected, 'has-error': hasError }">
     <Handle type="target" :position="Position.Top" />
     <div class="row items-center no-wrap">
       <PluginIcon :action="data.action" size="16px" class="q-mr-sm" />
@@ -18,20 +18,27 @@
         <div class="node-name ellipsis">{{ data.name || "(unnamed)" }}</div>
         <div class="node-action ellipsis">{{ data.action }}</div>
       </div>
+      <q-icon v-if="hasError" name="warning" color="negative" size="14px" class="q-ml-xs">
+        <q-tooltip>Missing required inputs</q-tooltip>
+      </q-icon>
     </div>
     <Handle type="source" :position="Position.Bottom" />
   </div>
 </template>
 
 <script setup>
+import { computed, inject } from "vue";
 import { Handle, Position } from "@vue-flow/core";
 import PluginIcon from "../../PluginIcon.vue";
 
-defineProps({
+const props = defineProps({
   id:       { type: String, required: true },
   data:     { type: Object, required: true },
   selected: { type: Boolean, default: false },
 });
+
+const errorNodeIds = inject("canvasValidationErrors", computed(() => new Set()));
+const hasError = computed(() => errorNodeIds.value?.has(props.id));
 </script>
 
 <style scoped>
@@ -55,6 +62,10 @@ defineProps({
 .plugin-node.selected {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px rgba(47, 109, 243, 0.20);
+}
+.plugin-node.has-error {
+  border-color: var(--q-negative, #c10015);
+  box-shadow: 0 0 0 2px rgba(193, 0, 21, 0.18);
 }
 .node-name   { font-weight: 600; color: var(--text); }
 .node-action { font-size: 10.5px; color: var(--text-muted); }

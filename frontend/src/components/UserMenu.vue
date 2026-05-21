@@ -168,6 +168,13 @@
 
           <q-separator />
 
+          <q-item clickable v-close-popup @click="goTour">
+            <q-item-section avatar><q-icon name="explore" /></q-item-section>
+            <q-item-section>Quick Start Guide</q-item-section>
+          </q-item>
+
+          <q-separator />
+
           <q-item clickable v-close-popup @click="onLogout">
             <q-item-section avatar><q-icon name="logout" /></q-item-section>
             <q-item-section>Sign out</q-item-section>
@@ -338,6 +345,7 @@ function goAudit()    { router.push({ name: "audit" }); }
 function goPlugins()  { router.push({ name: "plugins" }); }
 function goAdmin()    { router.push({ name: "admin" }); }
 function goJitGrants(){ router.push({ name: "jitGrants" }); }
+function goTour()     { router.push({ name: "home", query: { tour: "1" } }); }
 
 async function onLogout() {
   await auth.logout();

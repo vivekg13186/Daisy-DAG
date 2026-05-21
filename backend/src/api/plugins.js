@@ -20,6 +20,7 @@ import { requireUser, requireRole } from "../middleware/auth.js";
 import { ValidationError, NotFoundError, ForbiddenError } from "../utils/errors.js";
 import { auditLog } from "../audit/log.js";
 import JSZip from "jszip";
+import { resolve } from "../dsl/expression.js";
 
 const router = Router();
 router.use(requireUser);
@@ -331,5 +332,50 @@ router.post("/agent/download", async (req, res, next) => {
     res.send(buf);
   } catch (e) { next(e); }
 });
+
+// ── POST /plugins/test ──────────────────────────────────────────────────────
+//
+// Runs a single plugin node synchronously and returns its output.
+// This is the "test this node" feature in the Flow Designer — no queue,
+// no DB write, no BullMQ. The plugin is invoked directly via the registry.
+//
+// Body:
+//   { action: "http.request", inputs: { url: "${data.url}" }, context: { url: "https://..." } }
+//
+// `context` is the test data available to FEEL expressions as `data.*`.
+// Returns: { ok: true, output, resolvedInputs } | { ok: false, error }
+router.post("/test",
+  requireRole("admin", "editor"),
+  async (req, res, next) => {
+    try {
+      const { action, inputs = {}, context = {} } = req.body || {};
+      if (!action || typeof action !== "string") {
+        throw new ValidationError("body.action is required");
+      }
+      if (!registry.get(action)) {
+        throw new NotFoundError(`plugin "${action}"`);
+      }
+
+      // Mirror the executor's context shape so FEEL expressions like
+      // ${data.userId} and ${nodes.prev.output} resolve consistently.
+      const ctx = { data: context, nodes: {} };
+
+      let resolvedInputs;
+      try { resolvedInputs = resolve(inputs, ctx); }
+      catch (e) { throw new ValidationError(`input resolve failed: ${e.message}`); }
+
+      // Hard 30-second cap — enough for any reasonable plugin call,
+      // prevents a misbehaving HTTP plugin from hanging the response.
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 30_000);
+      try {
+        const output = await registry.invoke(action, resolvedInputs, ctx, {}, { signal: ac.signal });
+        res.json({ ok: true, output, resolvedInputs });
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (e) { next(e); }
+  },
+);
 
 export default router;

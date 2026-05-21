@@ -155,6 +155,12 @@ html, body, #app {
   font-size: 14.5px;
   color: var(--text);
 }
+/* Clip dialog cards to their border-radius so toolbar close buttons
+   don't overflow the rounded corners. q-select / q-menu dropdowns
+   teleport to <body>, so they are unaffected. */
+.q-dialog .q-card {
+  overflow: hidden;
+}
 .app-toolbar .app-subtitle {
   margin-left: 8px;
   font-size: 12px;

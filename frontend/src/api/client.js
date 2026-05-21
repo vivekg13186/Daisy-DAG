@@ -179,11 +179,25 @@ export const Plugins = {
       { name, files }, { responseType: "blob" });
     return r.data;        // Blob
   },
+
+  // Test a single plugin node synchronously. No queue, no DB write.
+  // action  — plugin name, e.g. "http.request"
+  // inputs  — the node's configured inputs (may contain ${...} FEEL)
+  // context — test data available to FEEL as data.*
+  // Returns: { ok: true, output, resolvedInputs } | throws on error
+  test: ({ action, inputs, context }) =>
+    api.post("/plugins/test", { action, inputs, context }).then(r => r.data),
 };
 
 export const AI = {
-  // { configured, provider, model }
-  status: () => api.get("/ai/status").then(r => r.data),
+  // { configured, provider, model, source, keyPreview }
+  status:        ()     => api.get("/ai/status").then(r => r.data),
+  // { source, provider, model, baseUrl, configured, keyPreview, dbOverrides }
+  getSettings:   ()     => api.get("/ai/settings").then(r => r.data),
+  // { provider?, apiKey?, model?, baseUrl? }
+  saveSettings:  (body) => api.put("/ai/settings", body).then(r => r.data),
+  // Revert to env vars
+  clearSettings: ()     => api.delete("/ai/settings").then(r => r.data),
   // messages: [{ role: "user"|"assistant", content: string }]
   chat:   (messages) => api.post("/ai/chat", { messages }).then(r => r.data),
 

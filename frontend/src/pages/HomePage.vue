@@ -51,6 +51,50 @@
 
     <OrchestratorChat v-model="orchestratorOpen" @saved="onOrchestratorSaved" />
 
+    <!-- ── Onboarding tour ──────────────────────────────────────────── -->
+    <q-dialog v-model="tourOpen" persistent>
+      <q-card style="min-width:380px;max-width:460px">
+        <q-card-section class="row items-center q-pb-none">
+          <q-icon :name="tourSteps[tourStep].icon" color="primary" size="28px" class="q-mr-sm" />
+          <div class="text-subtitle1">{{ tourSteps[tourStep].title }}</div>
+          <q-space />
+          <q-btn flat round dense icon="close" @click="dismissTour">
+            <q-tooltip>Skip tour</q-tooltip>
+          </q-btn>
+        </q-card-section>
+
+        <q-card-section>
+          <div class="text-body2 q-mb-md">{{ tourSteps[tourStep].body }}</div>
+          <!-- Step dots -->
+          <div class="row justify-center q-gutter-xs q-mb-xs">
+            <div
+              v-for="(_, i) in tourSteps" :key="i"
+              :style="{
+                width: '8px', height: '8px', borderRadius: '50%',
+                background: i === tourStep ? 'var(--q-primary)' : '#cbd5e1',
+                transition: 'background 0.2s',
+              }"
+            />
+          </div>
+        </q-card-section>
+
+        <q-card-actions align="right" class="q-pt-none">
+          <q-btn
+            v-if="tourSteps[tourStep].action"
+            flat no-caps
+            :label="tourSteps[tourStep].action.label"
+            color="primary"
+            @click="router.push(tourSteps[tourStep].action.route); dismissTour()"
+          />
+          <q-btn
+            unelevated no-caps color="primary"
+            :label="tourStep < tourSteps.length - 1 ? 'Next' : 'Get started'"
+            @click="tourNext"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- Activity bar — fixed-width vertical rail of icons -->
     <q-drawer
       side="left"
@@ -346,6 +390,51 @@ watch(visibleSections, (vs) => {
 // owned by HomePage so the same instance survives sidebar navigation.
 const orchestratorOpen = ref(false);
 
+// ── First-login onboarding tour ────────────────────────────────────────
+const ONBOARDED_KEY  = "daisy.onboarded";
+const tourOpen       = ref(false);
+const tourStep       = ref(0);
+const tourSteps = [
+  {
+    icon: "vpn_key",
+    title: "Set your AI key",
+    body:  "Set ANTHROPIC_API_KEY or OPENAI_API_KEY as an environment variable before starting the backend, " +
+           "then restart it. Once set, the AI assistant, Prompt tab, and Diagnose failure features become active. " +
+           "Check Admin → Workspace to see current AI status.",
+    action: { label: "Open Workspace settings", route: "/admin?view=workspace" },
+  },
+  {
+    icon: "account_tree",
+    title: "Create your first workflow",
+    body:  "Click '+ New flow' in the Workflows section. " +
+           "Drag plugins from the left palette onto the canvas and connect them.",
+    action: null,
+  },
+  {
+    icon: "play_arrow",
+    title: "Run a workflow",
+    body:  "Open any workflow in the Flow editor and click the ▶ Run button in the toolbar. " +
+           "The Instance Viewer shows live per-node progress.",
+    action: null,
+  },
+  {
+    icon: "people",
+    title: "Invite teammates",
+    body:  "Go to Admin → Users to add more users. " +
+           "Admins can create workflows; editors can run them; viewers are read-only.",
+    action: { label: "Open Users", route: "/users" },
+  },
+];
+
+function dismissTour() {
+  tourOpen.value = false;
+  try { localStorage.setItem(ONBOARDED_KEY, "1"); } catch { /* private mode */ }
+}
+function tourNext() {
+  if (tourStep.value < tourSteps.length - 1) tourStep.value++;
+  else dismissTour();
+}
+
 // When the agent finishes saving a workflow / agent / plugin we
 // refresh the underlying tables so the new row shows up immediately.
 function onOrchestratorSaved(_evt) { reload(); }
@@ -538,7 +627,25 @@ async function reload() {
   agent_rows.value   = agents;
   exec_rows.value    = execs;
 }
-onMounted(reload);
+onMounted(() => {
+  reload();
+  // Show the onboarding tour:
+  //  • first time (no localStorage flag) — admins only
+  //  • any time — when ?tour=1 query param is present (e.g. from UserMenu)
+  try {
+    const forceOpen = route.query.tour === "1";
+    if (forceOpen || (!localStorage.getItem(ONBOARDED_KEY) && auth.user?.role === "admin")) {
+      tourStep.value = 0;
+      tourOpen.value = true;
+      if (forceOpen) {
+        // Clear the flag so dismissing doesn't permanently re-suppress.
+        localStorage.removeItem(ONBOARDED_KEY);
+        // Clean the URL param without a page reload.
+        router.replace({ query: { ...route.query, tour: undefined } });
+      }
+    }
+  } catch { /* private mode — skip tour */ }
+});
 
 // ──────────────────────────────────────────────────────────────────────
 // Row actions

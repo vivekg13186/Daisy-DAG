@@ -22,7 +22,7 @@
     </div>
 
     <!-- ── Center: VueFlow canvas ───────────────────────────────────── -->
-    <div class="flow-container col">
+    <div class="flow-container col" @dragover="onDragOver" @drop="onDrop">
       <VueFlow v-model:nodes="nodes" v-model:edges="edges" class="fit" :default-viewport="{ x: 0, y: 0, zoom: 1 }"
         @node-click="onNodeClick" @pane-click="onPaneClick">
         <Background />
@@ -59,6 +59,13 @@
               </q-tooltip>
             </q-icon>
           </ControlButton>
+          <ControlButton @click="openJsonPanel">
+            <q-icon name="code" style="color:black">
+              <q-tooltip anchor="center right" self="center left" :offset="[10, 10]">
+                Edit as JSON
+              </q-tooltip>
+            </q-icon>
+          </ControlButton>
         </Controls>
         <MiniMap pannable zoomable />
 
@@ -71,6 +78,45 @@
       </VueFlow>
     </div>
 
+    <!-- ── Node test dialog ──────────────────────────────────────────── -->
+    <NodeTestDialog
+      v-model="testDialogOpen"
+      :node="selectedNode"
+    />
+
+    <!-- ── JSON editor panel ─────────────────────────────────────────── -->
+    <q-dialog v-model="jsonPanelOpen" position="right" full-height>
+      <q-card style="width:520px;max-width:92vw" class="column no-wrap full-height">
+        <q-toolbar dense style="background:var(--surface-2);border-bottom:1px solid var(--border)">
+          <q-icon name="code" class="q-mr-sm" />
+          <q-toolbar-title class="text-subtitle2">Edit as JSON</q-toolbar-title>
+          <q-btn flat round dense size="sm" icon="content_copy" @click="copyJson">
+            <q-tooltip>Copy</q-tooltip>
+          </q-btn>
+          <q-btn flat round dense icon="close" v-close-popup />
+        </q-toolbar>
+
+        <div class="col" style="min-height:0;position:relative">
+          <textarea
+            v-model="jsonText"
+            class="json-edit-area"
+            spellcheck="false"
+            @input="jsonError = ''"
+          />
+        </div>
+
+        <div v-if="jsonError" class="json-edit-error">
+          <q-icon name="error_outline" class="q-mr-xs" />{{ jsonError }}
+        </div>
+
+        <q-separator />
+        <q-card-actions align="right" class="q-pa-sm">
+          <q-btn flat no-caps label="Cancel" v-close-popup />
+          <q-btn unelevated color="primary" no-caps label="Apply" @click="applyJson" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- ── Right: properties + per-node toolbar ─────────────────────── -->
     <div v-if="rightOpen" class="right-pane column no-wrap" style="width: 450px;">
       <q-toolbar dense class="panel-toolbar" style="padding-right:5px!important">
@@ -79,6 +125,10 @@
         </span>
         <q-space />
         <div>
+          <q-btn v-if="selectedNode && selectedNode.type !== 'note'" dense flat round icon="play_arrow" color="positive" size="sm"
+            @click="testDialogOpen = true">
+            <q-tooltip>Test this node</q-tooltip>
+          </q-btn>
           <q-btn v-if="selectedNode" dense flat round icon="delete" color="negative" size="sm"
             @click="onDeleteSelected">
             <q-tooltip>Delete selected node</q-tooltip>
@@ -114,7 +164,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, onMounted, onBeforeUnmount, nextTick } from "vue";
+import { ref, watch, computed, onMounted, onBeforeUnmount, nextTick, provide } from "vue";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import "@vue-flow/controls/dist/style.css";
@@ -129,18 +179,73 @@ import NodePalette from "./NodePalette.vue";
 import PluginNode from "./nodes/PluginNode.vue";
 import PluginPropertyPanel from "./nodes/PluginPropertyPanel.vue";
 import NoteNode from "./nodes/NoteNode.vue";
+import NodeTestDialog from "./NodeTestDialog.vue";
 import { buildNodeRegistry } from "./NodeRegistry.js";
 import { useLayout } from "../useLayout.js";
+import { serializeModelToDsl, parseDslToModel } from "./flowModel.js";
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
   plugins: { type: Array, default: () => [] },
+  validationErrors: { type: Array, default: () => [] }, // [{ node, field, message }]
 });
 const emit = defineEmits(["update:modelValue"]);
+
+// Provide validation errors to child nodes via inject (avoids prop-drilling
+// through VueFlow's node component boundary).
+provide("canvasValidationErrors", computed(() => {
+  const nodeIds = new Set((props.validationErrors || []).map(e => e.node));
+  return nodeIds;
+}));
 
 // ── Drawer toggles ──────────────────────────────────────────────────────────
 const leftOpen = ref(true);
 const rightOpen = ref(false);
+const testDialogOpen = ref(false);
+
+// ── JSON editor panel ───────────────────────────────────────────────────────
+const jsonPanelOpen = ref(false);
+const jsonText      = ref("");
+const jsonError     = ref("");
+
+function openJsonPanel() {
+  try { jsonText.value = serializeModelToDsl(props.modelValue); }
+  catch (e) { jsonText.value = ""; }
+  jsonError.value  = "";
+  jsonPanelOpen.value = true;
+}
+
+function applyJson() {
+  try {
+    const newModel = parseDslToModel(jsonText.value);
+    emit("update:modelValue", newModel);
+    jsonPanelOpen.value = false;
+    jsonError.value = "";
+  } catch (e) {
+    jsonError.value = e.message || "Parse error";
+  }
+}
+
+function copyJson() {
+  navigator.clipboard.writeText(jsonText.value).catch(() => {});
+}
+
+// ── Drag & drop from palette ────────────────────────────────────────────────
+function onDragOver(event) {
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+}
+
+async function onDrop(event) {
+  event.preventDefault();
+  const pluginName = event.dataTransfer.getData("application/daisy-plugin");
+  if (!pluginName) return;
+  const plugin = (props.plugins || []).find(p => p.name === pluginName);
+  if (!plugin) return;
+  // Convert the screen drop position to canvas coordinates (accounts for pan + zoom).
+  const position = screenToFlowCoordinate({ x: event.clientX, y: event.clientY });
+  await onAddPlugin(plugin, position);
+}
 
 // ── VueFlow store ───────────────────────────────────────────────────────────
 const nodes = ref([]);
@@ -149,7 +254,7 @@ const edges = ref([]);
 // useVueFlow gives us imperative helpers that work against the canvas state
 // without going through the :nodes/:edges props (which would loop us back
 // into the parent's model).
-const { addNodes, addEdges, updateNode, onConnect } = useVueFlow();
+const { addNodes, addEdges, updateNode, onConnect, screenToFlowCoordinate } = useVueFlow();
 
 // VueFlow handles keyboard delete (Backspace / Delete) internally and
 // mutates our v-model'd `nodes` / `edges` refs directly. The
@@ -253,10 +358,11 @@ async function onAddNote() {
 // synchronously; the v-model'd `nodes` ref catches up one nextTick later.
 // Awaiting that tick before extractAndEmit ensures the new node is
 // included in the emitted model rather than dropping out as stale state.
-async function onAddPlugin(plugin) {
+async function onAddPlugin(plugin, position = null) {
   const entry = registry.value[plugin.name];
   if (!entry) return;
   const node = entry.defaultNode();
+  if (position) node.position = position;
   // Pick a unique on-screen name based on the action.
   const taken = new Set(nodes.value.map(n => n.data?.name).filter(Boolean));
   if (taken.has(node.data.name)) {
@@ -512,6 +618,26 @@ onBeforeUnmount(() => {
 .panel-toolbar {
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
-
+}
+.json-edit-area {
+  width: 100%;
+  height: 100%;
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border: none;
+  outline: none;
+  resize: none;
+  background: var(--surface);
+  color: var(--text);
+}
+.json-edit-error {
+  padding: 6px 12px;
+  background: rgba(220,38,38,0.08);
+  color: #b91c1c;
+  border-top: 1px solid rgba(220,38,38,0.2);
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 </style>

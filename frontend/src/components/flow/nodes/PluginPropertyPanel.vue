@@ -33,13 +33,24 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import PropertyEditor from "../../PropertyEditor.vue";
+import { Configs } from "../../../api/client.js";
 
 const props = defineProps({
   node: { type: Object, required: true },
 });
 const emit = defineEmits(["update"]);
+
+// ── Config names (for config-ref dropdowns) ───────────────────────────
+// Fetched once when the panel mounts; shared across all field renders.
+const configNames = ref([]);
+onMounted(async () => {
+  try {
+    const list = await Configs.list();
+    configNames.value = (list || []).map(c => c.name).filter(Boolean).sort();
+  } catch { /* silently fall back to free-text */ }
+});
 
 // ── Module-level constants ─────────────────────────────────────────────
 // Declared up-front so the `immediate: true` watcher below can call
@@ -99,11 +110,12 @@ function buildSchema(inputSchema) {
   };
 
   // ---- Inputs panel: derived from the plugin's schema --------------
-  // Plugins may set `title` on a property to override the label shown in
-  // the property panel. Otherwise we fall back to the property name itself
-  // — that's been the existing behaviour and keeps the UI compact.
+  // configRefs lists which input fields reference a stored config by name.
+  const configRefNames = new Set(
+    (props.node?.data?.plugin?.configRefs || []).map(r => r.name)
+  );
   const inputsChildren = Object.entries(properties).map(([key, def]) =>
-    fieldFromSchema(`inputs.${key}`, def.title || key, def, required.has(key))
+    fieldFromSchema(`inputs.${key}`, def.title || key, def, required.has(key), configRefNames.has(key))
   );
   const inputsPanel = {
     name: "Inputs",
@@ -193,12 +205,24 @@ function describeType(def) {
 }
 
 /** Convert one JSON Schema property into a PropertyEditor child. */
-function fieldFromSchema(bind, label, def, isRequired) {
+function fieldFromSchema(bind, label, def, isRequired, isConfigRef = false) {
   const validation = {};
   if (isRequired)               validation.required = true;
   if (def.minimum !== undefined) validation.min = def.minimum;
   if (def.maximum !== undefined) validation.max = def.maximum;
   if (def.format === "uri")     validation.url = true;
+
+  // 0) config-ref → select from available config names
+  if (isConfigRef) {
+    return {
+      ui_type: "select",
+      label,
+      bind,
+      options: configNames.value,   // configNames is a ref; schema is computed → reruns when it changes
+      validation,
+      hint: def.description || "Select a configuration set created in Home → Configurations.",
+    };
+  }
 
   // 1) enum → select
   if (Array.isArray(def.enum)) {

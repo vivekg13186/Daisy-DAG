@@ -107,7 +107,6 @@
                 <q-tab name="overview" label="Overview" />
                 <q-tab v-if="mode === 'visual'" name="canvas" label="Flow editor" />
                 <q-tab v-else                   name="dsl"    label="DSL editor" />
-                <q-tab name="json"     label="JSON" />
             </q-tabs>
         </q-header>
 
@@ -134,23 +133,46 @@
                          visual mode — that's how we get rid of the live
                          sync bugs that motivated this split. -->
                     <q-tab-panel v-if="mode === 'visual'" name="canvas" class="q-pa-none">
-                        <CanvasTab v-model="model" :plugins="plugins" />
+                        <CanvasTab v-model="model" :plugins="plugins" :validation-errors="validationErrors" />
                     </q-tab-panel>
                     <q-tab-panel v-else name="dsl" class="q-pa-none">
                         <DslEditorTab ref="codeEditorRef" v-model="model" :plugins="plugins" />
-                    </q-tab-panel>
-                    <!-- JSON viewer — read-only in BOTH modes. Lets a
-                         power user verify exactly what will be sent to
-                         the server, including the non-DSL fields (retry,
-                         retryDelay, meta.positions, etc.) that aren't
-                         visible in the DSL surface. -->
-                    <q-tab-panel name="json" class="q-pa-none">
-                        <JsonTab v-model="model" />
                     </q-tab-panel>
                 </q-tab-panels>
 
                 <!-- Run dialog — collects optional JSON input then enqueues -->
                 <RunDialog v-model="runDialogOpen" :initial="lastRunInput" @submit="onRunSubmit" />
+
+                <!-- Validation errors dialog — shown on save/run when required inputs are missing -->
+                <q-dialog v-model="validationErrOpen">
+                    <q-card style="min-width:420px;max-width:560px">
+                        <q-card-section class="row items-center q-pb-none">
+                            <q-icon name="error_outline" color="negative" size="24px" class="q-mr-sm" />
+                            <div class="text-subtitle1">Missing required inputs</div>
+                            <q-space />
+                            <q-btn flat round dense icon="close" v-close-popup />
+                        </q-card-section>
+                        <q-card-section>
+                            <div class="text-caption text-grey-7 q-mb-sm">
+                                Fix the following before saving or running this flow.
+                            </div>
+                            <q-list dense bordered class="rounded-borders">
+                                <q-item v-for="(err, i) in validationErrors" :key="i" dense>
+                                    <q-item-section>
+                                        <q-item-label>
+                                            <span v-if="err.node" class="text-weight-medium">{{ err.node }}</span>
+                                            <span v-if="err.field" class="text-grey-6"> · {{ err.field }}</span>
+                                        </q-item-label>
+                                        <q-item-label caption class="text-negative">{{ err.message }}</q-item-label>
+                                    </q-item-section>
+                                </q-item>
+                            </q-list>
+                        </q-card-section>
+                        <q-card-actions align="right">
+                            <q-btn flat no-caps label="Close" v-close-popup />
+                        </q-card-actions>
+                    </q-card>
+                </q-dialog>
 
                 <!-- Share dialog — per-workflow ACL overlay. Lazy
                      instantiation: only mounted when the user opens it,
@@ -228,7 +250,6 @@ import PromptTab from "../components/flow/PromptTab.vue";
 import OverviewTab from "../components/flow/OverviewTab.vue";
 import CanvasTab from "../components/flow/CanvasTab.vue";
 import DslEditorTab from "../components/flow/DslEditorTab.vue";
-import JsonTab from "../components/flow/JsonTab.vue";
 import RunDialog from "../components/RunDialog.vue";
 import ShareResourceDialog from "../components/ShareResourceDialog.vue";
 import {
@@ -282,10 +303,12 @@ const plugins = ref([]);
 // flag that disables the toolbar Run button while we save + enqueue.
 // `lastRunInput` is the last successful payload, prefilled into the
 // dialog so users running the same flow repeatedly don't have to retype.
-const runDialogOpen = ref(false);
-const shareOpen     = ref(false);
-const running       = ref(false);
-const lastRunInput  = ref({});
+const runDialogOpen     = ref(false);
+const shareOpen         = ref(false);
+const running           = ref(false);
+const lastRunInput      = ref({});
+const validationErrOpen = ref(false);
+const validationErrors  = ref([]);   // [{ node, field, message }]
 
 // ── Archive / history state ────────────────────────────────────────────
 // Archives are explicit snapshots stored server-side. Editor saves no
@@ -359,6 +382,8 @@ watch(mode, (m) => {
 watch(model, (m) => {
     try { dirty.value = serializeModelToDsl(m) !== lastSavedDsl; }
     catch { dirty.value = true; }
+    // Clear node error highlights when the user edits the flow.
+    if (validationErrors.value.length) validationErrors.value = [];
 }, { deep: true });
 
 // ----- toolbar -----
@@ -386,7 +411,17 @@ async function onSave() {
         // JSON in the inputs editor will simply have a stale-but-valid
         // object persisted (the last successful parse).
         try { await Graphs.validate(dsl); }
-        catch (e) { throw new Error(formatValidationErr(e)); }
+        catch (e) {
+            // Surface structured validation errors in a dialog so they
+            // don't disappear in a toast. Each error row is { node, field, message }.
+            const errs = parseValidationErrors(e);
+            if (errs.length) {
+                validationErrors.value  = errs;
+                validationErrOpen.value = true;
+                return;
+            }
+            throw new Error(formatValidationErr(e));
+        }
 
         let saved;
         if (isNew.value) saved = await Graphs.create(dsl);
@@ -447,6 +482,19 @@ async function onRunClick() {
         if (!ok) return;
         await onSave();
         if (dirty.value) return;          // save failed — bail
+        if (validationErrOpen.value) return; // validation errors shown — bail
+    }
+    // Pre-run validation: catch missing required inputs before queuing.
+    try {
+        const dsl = serializeModelToDsl(model.value);
+        await Graphs.validate(dsl);
+    } catch (e) {
+        const errs = parseValidationErrors(e);
+        if (errs.length) {
+            validationErrors.value  = errs;
+            validationErrOpen.value = true;
+            return;
+        }
     }
     runDialogOpen.value = true;
 }
@@ -673,6 +721,21 @@ function formatValidationErr(e) {
     if (!data) return e?.message || "validation failed";
     const details = (data.details || []).map(d => ` • ${d.path || ""} ${d.message || ""}`).join("\n");
     return `${data.message}${details ? "\n" + details : ""}`;
+}
+// Parse the structured `details` array from a validation error response into
+// { node, field, message } rows for the dialog table.
+function parseValidationErrors(e) {
+    const details = e?.response?.data?.details;
+    if (!Array.isArray(details) || !details.length) return [];
+    return details.map(d => {
+        // path is typically "nodes.<name>.inputs.<field>"
+        const parts = (d.path || "").split(".");
+        const nodeIdx  = parts.indexOf("nodes");
+        const inputIdx = parts.indexOf("inputs");
+        const node  = nodeIdx  >= 0 ? parts[nodeIdx  + 1] || "" : "";
+        const field = inputIdx >= 0 ? parts[inputIdx + 1] || "" : (d.path || "");
+        return { node, field, message: d.message || "" };
+    });
 }
 </script>
 
