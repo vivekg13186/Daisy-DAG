@@ -5,6 +5,7 @@ import { setKv } from "../../engine/memoryStore.js";
 
 export default {
   name: "memory.set",
+  category: "engine",
   description:
     "Store a value in workflow memory. Persists across runs. Read " +
     "back via ${memory.<key>} or the memory.get plugin.",

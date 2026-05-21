@@ -18,6 +18,7 @@ import {
 
 export default {
   name: "sql.delete",
+  category: "enterprise",
   description:
     "Run a parameterised DELETE against a stored database configuration. " +
     "Always include a WHERE clause — there's no safety net here.",

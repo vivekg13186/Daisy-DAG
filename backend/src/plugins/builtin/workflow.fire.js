@@ -30,6 +30,7 @@ const MAX_DEPTH = 10;
 
 export default {
   name: "workflow.fire",
+  category: "engine",
   description:
     "Spawn another workflow execution and return its id immediately " +
     "(fire-and-forget). The caller does NOT wait for the spawned flow. " +

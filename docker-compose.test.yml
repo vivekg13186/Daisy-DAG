@@ -1,0 +1,118 @@
+# Isolated stack for the Playwright suite. Three properties matter:
+#
+#   1. Every service runs on a non-default port so it can sit next to
+#      the dev stack on the same machine without colliding.
+#   2. Postgres + Redis use tmpfs for their data dirs — every `up` is
+#      a virgin database, so tests never need teardown logic.
+#   3. BOOTSTRAP_ADMIN_AUTOCREATE seeds the admin on first worker
+#      boot. The Playwright suite logs in as this user, then carves
+#      out per-test fixtures through the API.
+#
+# Boot the stack:
+#   docker compose -f docker-compose.test.yml up -d --wait
+#
+# Tear it down (data evaporates because of tmpfs, so this is cheap):
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: dag_postgres_test
+    environment:
+      POSTGRES_USER: dag
+      POSTGRES_PASSWORD: dag
+      POSTGRES_DB: dag_engine_test
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dag -d dag_engine_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis-test:
+    image: redis:7-alpine
+    container_name: dag_redis_test
+    ports:
+      - "6380:6379"
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Migrate-and-exit container — runs `npm run migrate` against the
+  # fresh DB, then exits 0. The API and worker `depends_on` this so
+  # they only start once the schema is in place.
+  migrate-test:
+    image: ${BACKEND_IMAGE:-daisy-workflow-backend:local}
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    container_name: dag_migrate_test
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://dag:dag@postgres-test:5432/dag_engine_test
+    command: ["node", "src/db/migrate.js"]
+    restart: "no"
+
+  api-test:
+    image: ${BACKEND_IMAGE:-daisy-workflow-backend:local}
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    container_name: dag_api_test
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+      redis-test:
+        condition: service_healthy
+    environment:
+      NODE_ENV: test
+      PORT: 3000
+      DATABASE_URL: postgres://dag:dag@postgres-test:5432/dag_engine_test
+      REDIS_URL: redis://redis-test:6379
+      JWT_SECRET: test-jwt-secret-not-for-prod
+      # Permissive CORS — Playwright drives a different origin (5174).
+      # The server.js code already reflects any origin in dev/test.
+      LOG_LEVEL: warn
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  worker-test:
+    image: ${BACKEND_IMAGE:-daisy-workflow-backend:local}
+    build:
+      context: ./backend
+      dockerfile: ../docker/backend.Dockerfile
+    container_name: dag_worker_test
+    depends_on:
+      migrate-test:
+        condition: service_completed_successfully
+      redis-test:
+        condition: service_healthy
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: postgres://dag:dag@postgres-test:5432/dag_engine_test
+      REDIS_URL: redis://redis-test:6379
+      JWT_SECRET: test-jwt-secret-not-for-prod
+      LOG_LEVEL: warn
+      # Seed an admin so the Playwright suite can log in immediately.
+      # First worker boot picks these up via runIfRequested(); reruns
+      # are no-ops because the user already exists.
+      BOOTSTRAP_ADMIN_AUTOCREATE: "true"
+      BOOTSTRAP_ADMIN_EMAIL: "admin@test.local"
+      BOOTSTRAP_ADMIN_PASSWORD: "Test12345!Test"
+      BOOTSTRAP_ADMIN_WORKSPACE: "Test Workspace"
+    command: ["node", "src/worker.js"]

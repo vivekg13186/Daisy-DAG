@@ -9,6 +9,7 @@ import { appendHistory } from "../../engine/memoryStore.js";
 
 export default {
   name: "memory.history.append",
+  category: "engine",
   description:
     "Append a {role, content} turn to a conversation. Use to log " +
     "extra system messages, capture redacted user input, or maintain " +

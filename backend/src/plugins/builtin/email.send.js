@@ -10,6 +10,7 @@ const stringList = {
 
 export default {
   name: "email.send",
+  category: "enterprise",
   description:
     "Send an email via SMTP. The `config` input names a stored configuration " +
     "(type mail.smtp) which provides the host, port, credentials, and default " +

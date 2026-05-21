@@ -17,6 +17,7 @@ import {
 
 export default {
   name: "sql.update",
+  category: "enterprise",
   description:
     "Run a parameterised UPDATE against a stored database configuration. " +
     "Always include a WHERE clause unless you really mean to update every row.",

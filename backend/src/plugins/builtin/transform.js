@@ -14,6 +14,7 @@ import { FEEL_HELPERS } from "../../dsl/expression.js";
 
 export default {
   name: "transform",
+  category: "engine",
   description:
     "Evaluates a FEEL expression and returns it as `value`. " +
     "Bind it to a ctx variable via the Outputs panel (value → <var name>).",

@@ -1,0 +1,46 @@
+// Page Object for /agentDesigner/:id.
+//
+// Smoke layer didn't touch this surface — Layer 2 does. The form
+// uses Quasar inputs with `label="..."` props, so getByLabel keeps
+// working without data-test annotations on the components.
+
+export class AgentDesigner {
+  /** @param {import("@playwright/test").Page} page */
+  constructor(page) { this.page = page; }
+
+  async open(agentId) {
+    await this.page.goto(`/agentDesigner/${agentId}`);
+    // Wait for the title input to hydrate — proves the agent row
+    // arrived from the API and the form populated.
+    await this.page.getByLabel(/title/i).first().waitFor({ state: "visible" });
+  }
+
+  /** Fill the title input. Quasar wraps inputs in <label> so
+   *  getByLabel finds the actual <input>. */
+  async setTitle(title) {
+    const input = this.page.getByLabel(/title/i).first();
+    await input.click({ clickCount: 3 });
+    await input.fill(title);
+  }
+
+  async setPrompt(text) {
+    // The system-prompt field is a textarea labelled "System prompt"
+    // or just "Prompt" depending on which template binding is on.
+    // Match both.
+    const input = this.page.getByLabel(/^(system\s+)?prompt$/i).first();
+    await input.click({ clickCount: 3 });
+    await input.fill(text);
+  }
+
+  /** Save — the toolbar's primary action button. */
+  async save() {
+    await this.page.getByRole("button", { name: /^save$/i }).first().click();
+  }
+
+  /** The Quasar notify banner appears for a few seconds after save.
+   *  We assert on the success notify so the test knows persistence
+   *  came back from the API. */
+  async expectSaveToast() {
+    await this.page.locator(".q-notification").filter({ hasText: /saved|updated|success/i }).first().waitFor({ state: "visible" });
+  }
+}

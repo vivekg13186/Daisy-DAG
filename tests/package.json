@@ -1,0 +1,21 @@
+{
+  "name": "daisy-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright UI test suite — Layer 1 (smoke) + future Layer 2 (feature) + Layer 3 (regression).",
+  "scripts": {
+    "test:smoke": "playwright test smoke",
+    "test:features": "playwright test features",
+    "test:all": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "PWDEBUG=1 playwright test",
+    "report": "playwright show-report",
+    "stack:up": "docker compose -f ../docker-compose.test.yml up -d --wait",
+    "stack:down": "docker compose -f ../docker-compose.test.yml down -v",
+    "stack:logs": "docker compose -f ../docker-compose.test.yml logs -f"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

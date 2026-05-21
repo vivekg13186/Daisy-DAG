@@ -132,6 +132,101 @@ export const TYPES = Object.freeze({
         description: "Bedrock only. Optional — leave blank to use the standard AWS credential chain." },
     ],
   },
+  webhook: {
+    label: "Webhook target",
+    description:
+      "Outbound webhook URL + optional HMAC signing secret. Referenced by " +
+      "the webhook.send plugin. Stored separately from raw http.request so " +
+      "the URL doesn't have to live in workflow DSL.",
+    fields: [
+      { name: "url", type: "string", required: true,
+        description: "Full URL to POST to (https recommended)." },
+      { name: "secret", type: "string", secret: true,
+        description:
+          "Optional HMAC-SHA256 signing key. When set, every request gets " +
+          "an X-Daisy-Signature header so the receiver can verify integrity." },
+      { name: "authHeader", type: "string",
+        description:
+          "Optional Authorization header value (e.g. \"Bearer xyz\"). " +
+          "Sent verbatim on every call." },
+      { name: "extraHeaders", type: "string",
+        description:
+          "Optional. JSON object of header name → value, merged in after " +
+          "the call-level headers. Useful for routing keys, tenant ids, " +
+          "etc. Example: {\"X-Tenant\": \"acme\"}" },
+    ],
+  },
+  slack: {
+    label: "Slack workspace",
+    description:
+      "Slack bot credentials. Referenced by the slack.post plugin. The " +
+      "token must be a Bot User OAuth Token (xoxb-…) with chat:write " +
+      "scope on the channel(s) you want to post to.",
+    fields: [
+      { name: "botToken", type: "string", secret: true, required: true,
+        description: "Bot User OAuth Token (starts with xoxb-)." },
+      { name: "defaultChannel", type: "string",
+        description:
+          "Optional default channel ID (Cxxxxxx) or name (#general). " +
+          "Plugins can override per-call via the `channel` input." },
+    ],
+  },
+  "object.store": {
+    label: "Object storage (S3 / GCS / Azure Blob)",
+    description:
+      "Cloud object storage credentials. Referenced by the object.store.* " +
+      "plugins (read / write / list / delete / signed_url). One config per " +
+      "bucket — switch providers by changing the `provider` dropdown.",
+    fields: [
+      { name: "provider", type: "select", required: true,
+        options: ["s3", "gcs", "azure"],
+        default: "s3",
+        description:
+          "Backing service. `s3` covers AWS S3 + any S3-compatible store " +
+          "(MinIO, Cloudflare R2, DigitalOcean Spaces, Wasabi) — set " +
+          "`endpoint` to point at the non-AWS host. `gcs` is Google " +
+          "Cloud Storage. `azure` is Azure Blob Storage." },
+      { name: "bucket", type: "string", required: true,
+        description:
+          "Default bucket / container name. Plugins can override per call " +
+          "via the `bucket` input." },
+      // S3-flavoured fields. Leave blank for GCS / Azure.
+      { name: "region", type: "string",
+        description:
+          "S3 only. AWS region (e.g. us-east-1, eu-west-1). For " +
+          "S3-compatible stores any non-empty value usually works." },
+      { name: "endpoint", type: "string",
+        description:
+          "S3 only. Override the endpoint for S3-compatible stores " +
+          "(MinIO, R2, etc). Leave blank for AWS S3." },
+      { name: "forcePathStyle", type: "boolean", default: false,
+        description:
+          "S3 only. Set true for MinIO / older S3-compatibles that need " +
+          "path-style URLs (bucket in the path, not the hostname)." },
+      { name: "accessKeyId", type: "string", secret: true,
+        description:
+          "S3 only. Leave blank to use the worker's standard AWS " +
+          "credential chain (env vars, IAM role)." },
+      { name: "secretAccessKey", type: "string", secret: true,
+        description: "S3 only. Pair with accessKeyId." },
+      // GCS-flavoured fields.
+      { name: "gcsCredentialsJson", type: "string", secret: true,
+        description:
+          "GCS only. JSON service-account key (the file contents). Leave " +
+          "blank to use the worker's Application Default Credentials." },
+      // Azure-flavoured fields.
+      { name: "azureAccount", type: "string",
+        description: "Azure only. Storage account name." },
+      { name: "azureKey", type: "string", secret: true,
+        description:
+          "Azure only. Shared key for the storage account. Use this OR " +
+          "`azureSas`." },
+      { name: "azureSas", type: "string", secret: true,
+        description:
+          "Azure only. SAS token (preferred over the shared key for " +
+          "scoped access). Use this OR `azureKey`." },
+    ],
+  },
   "vector.qdrant": {
     label: "Qdrant vector store",
     description:
@@ -143,43 +238,6 @@ export const TYPES = Object.freeze({
         description: "Base URL of the Qdrant server. e.g. http://localhost:6333 or https://xyz-abc.eu-central.aws.cloud.qdrant.io" },
       { name: "apiKey", type: "string", secret: true,
         description: "Sent as the `api-key` header. Leave blank for unauthenticated self-hosted clusters." },
-    ],
-  },
-  ssh: {
-    label: "SSH host",
-    description:
-      "Connection details for SSH / SFTP. Referenced by the `ssh` plugin " +
-      "(exec / upload / download). Provide EITHER a password OR a privateKey " +
-      "— the plugin tries password auth first when both are set.",
-    fields: [
-      { name: "host",       type: "string", required: true,
-        description: "Hostname or IP of the remote server." },
-      { name: "port",       type: "number", default: 22,
-        description: "TCP port. Default 22." },
-      { name: "username",   type: "string", required: true },
-      { name: "password",   type: "string", secret: true,
-        description: "Password auth. Leave blank if you're using a private key." },
-      { name: "privateKey", type: "string", secret: true,
-        description: "PEM-encoded private key. Multi-line — paste the whole -----BEGIN…END----- block." },
-      { name: "passphrase", type: "string", secret: true,
-        description: "Optional passphrase protecting the private key." },
-    ],
-  },
-  ftp: {
-    label: "FTP / FTPS server",
-    description:
-      "Connection details for FTP or FTPS. Referenced by the `ftp` plugin " +
-      "(list / upload / download / delete / rename / mkdir / rmdir). For " +
-      "SFTP, use the `ssh` config type and the SSH plugin instead.",
-    fields: [
-      { name: "host",     type: "string",  required: true,
-        description: "Hostname or IP of the FTP server." },
-      { name: "port",     type: "number",  default: 21,
-        description: "TCP port. Default 21 (or 990 for implicit FTPS)." },
-      { name: "username", type: "string",  required: true },
-      { name: "password", type: "string",  secret: true },
-      { name: "secure",   type: "boolean", default: false,
-        description: "Use FTPS (FTP over TLS). Required for most modern public FTP endpoints." },
     ],
   },
   git: {

@@ -86,7 +86,9 @@ class PluginRegistry {
     try {
       const r = await pool.query(
         `SELECT name, version, manifest, transport_kind, endpoint, source, status,
-                COALESCE(is_default, true) AS is_default
+                COALESCE(is_default, true) AS is_default,
+                category,
+                COALESCE(deprecated, false) AS deprecated
            FROM plugins
           WHERE enabled = true
           ORDER BY name, version`,
@@ -100,7 +102,10 @@ class PluginRegistry {
         return;
       }
       if (e.code === "42703") {
-        // Fall back to the 018 shape (no is_default column).
+        // Fall back to the 018 shape (no is_default / category /
+        // deprecated columns). category + deprecated default to
+        // the values inside the manifest JSON, which the module
+        // export populated at upsert time.
         multiVersion = false;
         const r2 = await pool.query(
           `SELECT name, version, manifest, transport_kind, endpoint, source, status
@@ -108,7 +113,12 @@ class PluginRegistry {
             WHERE enabled = true
             ORDER BY name`,
         );
-        rows = r2.rows.map(r => ({ ...r, is_default: true }));
+        rows = r2.rows.map(r => ({
+          ...r,
+          is_default: true,
+          category:   r.manifest?.category   || null,
+          deprecated: r.manifest?.deprecated === true,
+        }));
       } else throw e;
     }
 
@@ -169,6 +179,10 @@ class PluginRegistry {
       isDefault:     !!row.is_default,
       source:        row.source,
       description:   row.manifest.description,
+      // Prefer the live column so operator overrides win; fall back
+      // to the manifest field (so pre-032 DBs still render right).
+      category:      row.category   ?? row.manifest.category   ?? null,
+      deprecated:    row.deprecated ?? row.manifest.deprecated === true,
       inputSchema:   row.manifest.inputSchema,
       outputSchema:  row.manifest.outputSchema,
       primaryOutput: row.manifest.primaryOutput,
@@ -190,6 +204,8 @@ class PluginRegistry {
       isDefault:     !!row.is_default,
       source:        row.source,
       description:   row.manifest.description,
+      category:      row.category   ?? row.manifest.category   ?? null,
+      deprecated:    row.deprecated ?? row.manifest.deprecated === true,
       inputSchema:   row.manifest.inputSchema,
       outputSchema:  row.manifest.outputSchema,
       primaryOutput: row.manifest.primaryOutput,
@@ -239,6 +255,8 @@ class PluginRegistry {
       isDefault:     p.isDefault,
       source:        p.source,
       description:   p.description,
+      category:      p.category,
+      deprecated:    p.deprecated,
       inputSchema:   p.inputSchema,
       outputSchema:  p.outputSchema,
       primaryOutput: p.primaryOutput,
@@ -379,6 +397,17 @@ async function invokeOverHttp(plugin, input, ctx, opts) {
 // ────────────────────────────────────────────────────────────────────
 
 export async function loadBuiltins() {
+  // Two source trees:
+  //   builtin/         — core plugins shipped with the engine
+  //   plugins-extra/   — operator-added in-process plugins (drop a .js
+  //                      file in the folder, restart, it's registered)
+  //
+  // The historic `_deprecated/` folder (shell.exec, ssh, ftp, file.*,
+  // csv.read/write, excel.read/write, mqtt.publish, web.scrape,
+  // stream-demo) has been removed in Step 8. Migration 034 purges any
+  // residual DB rows. Workflows that still reference those names now
+  // fail with "Unknown action" at parse time — `reportDeprecatedUsage`
+  // below scans every graph at boot and logs the offenders.
   const dirs = [
     { dir: path.resolve(__dirname, "builtin"),               source: "core"  },
     { dir: path.resolve(__dirname, "../../plugins-extra"),   source: "local" },
@@ -403,15 +432,109 @@ export async function loadBuiltins() {
       }
     }
   }
-  log.info("plugin builtins synced", { });
+  log.info("plugin builtins synced", {});
+}
+
+// The names removed in Step 8. We hard-code them so the boot scan
+// still surfaces broken workflows AFTER migration 034 has wiped the
+// `deprecated=true` DB rows — there's nothing left in the registry
+// or the DB to enumerate. If you deprecate a NEW plugin later, add
+// its name here and tag the module deprecated:true so the runtime
+// keeps a parallel path.
+const REMOVED_PLUGIN_NAMES = new Set([
+  "shell.exec",
+  "ssh", "ftp",
+  "file.read", "file.write", "file.list", "file.delete", "file.stat",
+  "csv.read", "csv.write", "excel.read", "excel.write",
+  "mqtt.publish",
+  "web.scrape",
+  "stream.demo",
+]);
+
+/**
+ * Scan all stored graphs for references to plugins that have been
+ * removed and emit one warning per (workspace, plugin) pair. Called
+ * from the worker / API boot AFTER loadBuiltins + loadAll. Fire-and-
+ * forget so a slow query never gates startup.
+ *
+ * Walks `dsl` JSONB on each graph row, picks out node `action` values,
+ * strips the optional `@version`, and matches against
+ * REMOVED_PLUGIN_NAMES + any plugin row still tagged deprecated=true
+ * (catches operator-deprecated plugins beyond the core set).
+ *
+ * Workflows that reference these names will fail at parse time with
+ * "Unknown action" — this log line tells admins WHICH workflows to
+ * rewrite.
+ */
+export async function reportDeprecatedUsage() {
+  const deprecatedNames = new Set(REMOVED_PLUGIN_NAMES);
+  // Also pick up anything still tagged deprecated=true in the DB —
+  // covers future deprecations done via the admin UI without a code
+  // change here.
+  try {
+    const r = await pool.query(`SELECT DISTINCT name FROM plugins WHERE deprecated = true`);
+    for (const row of r.rows) deprecatedNames.add(row.name);
+  } catch (e) {
+    // 42703 = column missing (pre-032). Fall back to the hard-coded
+    // set — best effort.
+    if (e.code !== "42703" && e.code !== "42P01") throw e;
+  }
+  if (deprecatedNames.size === 0) return;
+  let rows;
+  try {
+    const r = await pool.query(`SELECT id, workspace_id, name, dsl FROM graphs WHERE dsl IS NOT NULL`);
+    rows = r.rows;
+  } catch (e) {
+    if (e.code === "42P01" || e.code === "42703") return;   // pre-migration
+    throw e;
+  }
+  const offenders = new Map();    // key: workspace_id|plugin → { graphs:Set<id>, count:n }
+  for (const row of rows) {
+    const nodes = Array.isArray(row.dsl?.nodes) ? row.dsl.nodes : [];
+    for (const n of nodes) {
+      const raw = typeof n?.action === "string" ? n.action : "";
+      const name = raw.split("@")[0].trim();
+      if (!deprecatedNames.has(name)) continue;
+      const key = `${row.workspace_id || ""}|${name}`;
+      const slot = offenders.get(key) || { workspaceId: row.workspace_id, plugin: name, graphs: new Set(), count: 0 };
+      slot.graphs.add(row.name || row.id);
+      slot.count += 1;
+      offenders.set(key, slot);
+    }
+  }
+  if (offenders.size === 0) return;
+  for (const { workspaceId, plugin, graphs, count } of offenders.values()) {
+    log.warn("removed plugin still referenced — workflows will fail at parse", {
+      workspaceId: workspaceId || null,
+      plugin,
+      nodeOccurrences: count,
+      graphCount:      graphs.size,
+      // Cap the sample so a workspace with hundreds of offending
+      // graphs doesn't flood the log line. The operator can SELECT
+      // from graphs directly to enumerate the rest.
+      graphs:          [...graphs].slice(0, 10),
+    });
+  }
 }
 
 async function upsertBuiltin(plugin, modulePath, source) {
   const version = plugin.version || "1.0.0";
+  // Category + deprecation flag are part of the module's default
+  // export so the file on disk is the source of truth — operators
+  // don't reach into the DB to flip these.
+  //
+  // Recognised categories: 'engine', 'ai', 'enterprise',
+  // 'deprecated'. Anything else is accepted and surfaces as-is in
+  // the admin UI but won't get the curated rail; please stick to
+  // these four.
+  const category   = typeof plugin.category === "string" ? plugin.category : null;
+  const deprecated = plugin.deprecated === true;
   const manifest = {
     name:          plugin.name,
     version,
     description:   plugin.description || "",
+    category,
+    deprecated,
     inputSchema:   plugin.inputSchema  || null,
     outputSchema:  plugin.outputSchema || null,
     primaryOutput: plugin.primaryOutput || null,
@@ -425,12 +548,24 @@ async function upsertBuiltin(plugin, modulePath, source) {
   // single-version UPSERT path. This keeps `npm run dev` working
   // against a pre-019 DB so the operator can run migrations
   // afterwards without the worker crashing on boot.
+  //
+  // The 032 migration adds `deprecated` and backfills `category`,
+  // but we still try the wider INSERT first so that a fresh DB
+  // (with all migrations applied) gets the columns populated
+  // straight from each plugin module's exported fields.
   const sqlV3 = `
     INSERT INTO plugins (
       name, version, manifest, transport_kind, endpoint,
-      source, status, is_default, updated_at
+      source, status, is_default,
+      category, deprecated,
+      updated_at
     )
-    VALUES ($1, $2, $3::jsonb, 'in-process', NULL, $4, 'healthy', true, NOW())
+    VALUES (
+      $1, $2, $3::jsonb, 'in-process', NULL,
+      $4, 'healthy', true,
+      $5, $6,
+      NOW()
+    )
     ON CONFLICT (name, version) DO UPDATE
        SET manifest       = EXCLUDED.manifest,
            transport_kind = EXCLUDED.transport_kind,
@@ -445,14 +580,23 @@ async function upsertBuiltin(plugin, modulePath, source) {
                             END,
            status         = 'healthy',
            is_default     = plugins.is_default,
+           -- Category + deprecated come from the module on every
+           -- boot (file is source of truth). If the module didn't
+           -- export them, keep whatever was already in the row so
+           -- operator overrides for marketplace plugins aren't lost.
+           category       = COALESCE(EXCLUDED.category,   plugins.category),
+           deprecated     = COALESCE(EXCLUDED.deprecated, plugins.deprecated),
            updated_at     = NOW()
      WHERE plugins.transport_kind = 'in-process'`;
   try {
-    await pool.query(sqlV3, [plugin.name, version, JSON.stringify(manifest), source]);
+    await pool.query(sqlV3, [
+      plugin.name, version, JSON.stringify(manifest),
+      source, category, deprecated,
+    ]);
     return;
   } catch (e) {
     if (e.code === "42P01") return;             // pre-migration; skip silently
-    if (e.code !== "42703") {                   // not "is_default column missing"
+    if (e.code !== "42703") {                   // not "column missing"
       log.warn("plugin upsert failed", { name: plugin.name, error: e.message });
       return;
     }

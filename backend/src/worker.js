@@ -11,7 +11,7 @@ import { pool } from "./db/pool.js";
 import { parseDag } from "./dsl/parser.js";
 import { executeDag } from "./engine/executor.js";
 import { executeBatch } from "./engine/batch.js";
-import { loadBuiltins, registry } from "./plugins/registry.js";
+import { loadBuiltins, registry, reportDeprecatedUsage } from "./plugins/registry.js";
 import { startHealthcheck, stopHealthcheck } from "./plugins/healthcheck.js";
 import { publish } from "./ws/broadcast.js";
 import { log } from "./utils/logger.js";
@@ -36,6 +36,10 @@ import { startWorkerProbe, stopWorkerProbe } from "./health/workerProbe.js";
 
 await loadBuiltins();
 await registry.loadAll();          // build in-memory cache from DB
+// One log.warn per (workspace, deprecated plugin) pair — same as
+// the API boot path. Helps operators see who's still wired to
+// plugins on the way out. Fire-and-forget so it can't fail boot.
+reportDeprecatedUsage().catch((e) => log.warn("deprecated-usage scan failed", { error: e.message }));
 await loadTriggerBuiltins();
 // Subscribe to all enabled triggers on worker boot. Errors per-trigger are
 // logged but don't crash the worker.

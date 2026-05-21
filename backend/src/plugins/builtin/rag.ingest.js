@@ -21,6 +21,7 @@ import { loadKb, createAndIngestDocument } from "../../rag/ingest.js";
 
 export default {
   name: "rag.ingest",
+  category: "ai",
   description:
     "Add a text document to a Knowledge Base. Use the REST upload " +
     "endpoint or extract upstream for non-text formats.",

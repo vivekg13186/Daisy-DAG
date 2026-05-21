@@ -5,6 +5,7 @@ import { getKv } from "../../engine/memoryStore.js";
 
 export default {
   name: "memory.get",
+  category: "engine",
   description:
     "Read a value from workflow memory. Returns null if the key " +
     "doesn't exist. Equivalent to ${memory.<key>} in expressions, " +

@@ -4,6 +4,7 @@ import { deleteKv } from "../../engine/memoryStore.js";
 
 export default {
   name: "memory.delete",
+  category: "engine",
   description:
     "Remove a key from workflow memory. Returns deleted=false when " +
     "the key didn't exist (idempotent).",

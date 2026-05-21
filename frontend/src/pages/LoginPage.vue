@@ -21,7 +21,7 @@
       <q-card-section class="text-center">
         <div class="text-h5">Sign in</div>
         <div class="text-caption text-grey-7 q-mt-xs">
-          Daisy Workflow engine
+          Daisy AI Orchestrator
         </div>
       </q-card-section>
 

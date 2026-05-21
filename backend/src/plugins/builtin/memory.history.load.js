@@ -9,6 +9,7 @@ import { loadHistory } from "../../engine/memoryStore.js";
 
 export default {
   name: "memory.history.load",
+  category: "engine",
   description:
     "Load the last N turns of a conversation from memory. Returns " +
     "{ turns: [{role, content}, …] } in chronological order " +

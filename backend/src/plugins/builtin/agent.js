@@ -32,6 +32,7 @@ import { render as renderPrompt } from "../../prompts/render.js";
 
 export default {
   name: "agent",
+  category: "ai",
   description:
     "Invoke a stored LLM agent. The `agent` input names a configured agent " +
     "(Home page → Agents). Set `conversationId` to enable per-conversation " +

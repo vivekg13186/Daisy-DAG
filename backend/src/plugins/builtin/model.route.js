@@ -18,6 +18,7 @@ import { loadRoute, dispatch } from "../../routing/dispatcher.js";
 
 export default {
   name: "model.route",
+  category: "ai",
   description:
     "Call an agent through a named route (static / tier / fallback). " +
     "Routes are configured under Home → Model routes; the agent itself " +

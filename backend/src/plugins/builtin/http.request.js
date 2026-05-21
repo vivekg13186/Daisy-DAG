@@ -1,5 +1,6 @@
 export default {
   name: "http.request",
+  category: "engine",
   description: "Performs an HTTP request via fetch and returns status + body.",
   inputSchema: {
     type: "object",

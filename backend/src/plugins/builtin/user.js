@@ -22,6 +22,7 @@ import { WAITING_MARKER } from "../../engine/executor.js";
 
 export default {
   name: "user",
+  category: "engine",
   description:
     "Pauses the workflow until someone POSTs JSON to " +
     "/executions/<execId>/nodes/<nodeName>/respond. The posted JSON " +

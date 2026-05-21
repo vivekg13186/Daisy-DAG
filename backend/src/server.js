@@ -11,7 +11,7 @@ import cookieParser from "cookie-parser";
 import { config } from "./config.js";
 import { log } from "./utils/logger.js";
 import { HttpError } from "./utils/errors.js";
-import { loadBuiltins, registry } from "./plugins/registry.js";
+import { loadBuiltins, registry, reportDeprecatedUsage } from "./plugins/registry.js";
 import { readiness } from "./health/checks.js";
 import { limiters } from "./middleware/rateLimit.js";
 import authRouter from "./api/auth.js";
@@ -27,6 +27,7 @@ import quotasRouter from "./api/quotas.js";
 import jitGrantsRouter from "./api/jitGrants.js";
 import samlConfigsRouter from "./api/samlConfigs.js";
 import auditRouter from "./api/audit.js";
+import workflowMetricsRouter from "./api/workflowMetrics.js";
 import graphsRouter from "./api/graphs.js";
 import executionsRouter from "./api/executions.js";
 import pluginsRouter from "./api/plugins.js";
@@ -46,6 +47,13 @@ import { attachWss } from "./ws/broadcast.js";
 
 await loadBuiltins();
 await registry.loadAll();
+// Side-effect: one log.warn per (workspace, deprecated plugin) pair
+// so operators can see, on boot, who's still wired to plugins on the
+// way out. Cheap (single SELECT, in-memory walk) — and skippable by
+// setting ALLOW_LEGACY_PLUGINS=0 (the registry won't load the
+// deprecated folder, so the set of deprecated names is empty and the
+// scan no-ops).
+reportDeprecatedUsage().catch((e) => log.warn("deprecated-usage scan failed", { error: e.message }));
 
 const app = express();
 // Cookie-aware CORS: when the frontend lives on a different origin
@@ -105,6 +113,7 @@ app.use("/quotas",               quotasRouter);
 app.use("/jit-grants",           jitGrantsRouter);
 app.use("/saml-config",          samlConfigsRouter);
 app.use("/audit", auditRouter);
+app.use("/workflow-metrics", workflowMetricsRouter);
 
 app.use("/graphs", graphsRouter);
 app.use("/executions", executionsRouter);

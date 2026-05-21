@@ -1,5 +1,5 @@
 {
-  "name":    "Daisy-workflow Official",
+  "name":    "Daisy AI Orchestrator Official",
   "version": "1",
   "description": "Local-disk fallback catalog. The default catalog source is the hosted https://daisy-workflow.web.app/plugin-catalog.json — this file is only used if that URL is unreachable, or if PLUGIN_CATALOG_FILE points to it explicitly (useful for air-gapped deployments). Mirror the schema below in any remote catalog you publish.",
 
@@ -67,6 +67,150 @@
       "manifestSha256":  null,
 
       "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#npm@0.1.0"
+    },
+    {
+      "name":            "slack",
+      "version":         "0.1.0",
+      "summary":         "Slack connector — channels.list, conversations.history, files.upload, reactions, scheduled messages. Use the in-tree slack.post for simple chat.postMessage; install this for everything else.",
+      "category":        "communication",
+      "tags":            ["slack", "chat", "messaging", "communication"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-slack",
+
+      "containerImage":  "vivek13186/daisy-plugin-slack:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-slack/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#slack@0.1.0"
+    },
+    {
+      "name":            "discord",
+      "version":         "0.1.0",
+      "summary":         "Discord connector — post messages, manage threads, fetch channel history, react to messages. Auth via a bot token.",
+      "category":        "communication",
+      "tags":            ["discord", "chat", "messaging", "communication"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-discord",
+
+      "containerImage":  "vivek13186/daisy-plugin-discord:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-discord/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#discord@0.1.0"
+    },
+    {
+      "name":            "pagerduty",
+      "version":         "0.1.0",
+      "summary":         "PagerDuty Events API v2 — trigger / acknowledge / resolve incidents, list on-call schedules, query users + teams. Bridge alerts from workflows into your incident pipeline.",
+      "category":        "observability",
+      "tags":            ["pagerduty", "alerting", "incident-management", "on-call"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-pagerduty",
+
+      "containerImage":  "vivek13186/daisy-plugin-pagerduty:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-pagerduty/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#pagerduty@0.1.0"
+    },
+    {
+      "name":            "github",
+      "version":         "0.1.0",
+      "summary":         "GitHub connector — issues, pull requests, comments, file content, releases, workflow dispatch. Auth via a fine-grained PAT or a GitHub App installation.",
+      "category":        "developer-tools",
+      "tags":            ["github", "git", "issues", "pull-requests", "developer-tools"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-github",
+
+      "containerImage":  "vivek13186/daisy-plugin-github:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-github/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#github@0.1.0"
+    },
+    {
+      "name":            "salesforce",
+      "version":         "0.1.0",
+      "summary":         "Salesforce connector — SOQL query, upsert / update records, run Apex REST endpoints, manage attachments. Auth via OAuth 2.0 client credentials.",
+      "category":        "crm",
+      "tags":            ["salesforce", "crm", "sales"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-salesforce",
+
+      "containerImage":  "vivek13186/daisy-plugin-salesforce:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-salesforce/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#salesforce@0.1.0"
+    },
+    {
+      "name":            "servicenow",
+      "version":         "0.1.0",
+      "summary":         "ServiceNow connector — incident, change-request, problem CRUD, table API queries, attachments. Auth via basic OAuth or instance OAuth 2.0.",
+      "category":        "itsm",
+      "tags":            ["servicenow", "itsm", "tickets", "change-management"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-servicenow",
+
+      "containerImage":  "vivek13186/daisy-plugin-servicenow:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-servicenow/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#servicenow@0.1.0"
+    },
+    {
+      "name":            "hubspot",
+      "version":         "0.1.0",
+      "summary":         "HubSpot CRM connector — contacts, companies, deals, tickets CRUD, search, associations, marketing email sends. Auth via a private app token.",
+      "category":        "crm",
+      "tags":            ["hubspot", "crm", "marketing"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-hubspot",
+
+      "containerImage":  "vivek13186/daisy-plugin-hubspot:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-hubspot/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#hubspot@0.1.0"
+    },
+    {
+      "name":            "okta",
+      "version":         "0.1.0",
+      "summary":         "Okta connector — user lookups, group membership, factor enrolment, lifecycle operations (activate / suspend / deactivate). Power dynamic RBAC checks inside a DAG.",
+      "category":        "identity",
+      "tags":            ["okta", "identity", "iam", "scim"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-okta",
+
+      "containerImage":  "vivek13186/daisy-plugin-okta:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-okta/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#okta@0.1.0"
+    },
+    {
+      "name":            "stripe",
+      "version":         "0.1.0",
+      "summary":         "Stripe connector — customers, payment intents, invoices, subscriptions CRUD, webhook signature verify. Auth via a restricted API key.",
+      "category":        "payments",
+      "tags":            ["stripe", "payments", "billing"],
+      "homepage":        "https://github.com/daisy-workflow/plugin-stripe",
+
+      "containerImage":  "vivek13186/daisy-plugin-stripe:latest",
+      "containerPort":   8080,
+
+      "manifestUrl":     "https://raw.githubusercontent.com/daisy-workflow/plugin-stripe/main/manifest.json",
+      "manifestSha256":  null,
+
+      "catalogEntryUrl": "https://daisy-workflow.example.com/catalog#stripe@0.1.0"
     }
   ]
 }

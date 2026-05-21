@@ -6,6 +6,7 @@ const MAX_DELAY_MS = 24 * 60 * 60 * 1000;   // 86_400_000
 
 export default {
   name: "delay",
+  category: "engine",
   description: "Sleeps for `ms` milliseconds (up to 24 hours).",
   inputSchema: {
     type: "object",

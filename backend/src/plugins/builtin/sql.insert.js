@@ -17,6 +17,7 @@ import {
 
 export default {
   name: "sql.insert",
+  category: "enterprise",
   description:
     "Run a parameterised INSERT against a stored database configuration. " +
     "Use a RETURNING clause to get the new row(s) back.",

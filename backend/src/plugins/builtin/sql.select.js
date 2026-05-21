@@ -17,6 +17,7 @@ import {
 
 export default {
   name: "sql.select",
+  category: "enterprise",
   description:
     "Run a parameterised SELECT against a stored database configuration. " +
     "The `config` input names the configuration; `sql` is the query text " +

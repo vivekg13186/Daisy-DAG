@@ -21,6 +21,7 @@ import { costMicros } from "../agent/pricing.js";
 
 export default {
   name: "image.generate",
+  category: "ai",
   description:
     "Generate an image from a text prompt. Backed by OpenAI DALL-E or " +
     "Google Imagen — both reuse a stored ai.provider config for the api key.",

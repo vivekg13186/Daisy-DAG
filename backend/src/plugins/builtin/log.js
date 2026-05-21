@@ -2,6 +2,7 @@ import { log } from "../../utils/logger.js";
 
 export default {
   name: "log",
+  category: "engine",
   description: "Logs a message and returns it as output.message.",
   inputSchema: {
     type: "object",

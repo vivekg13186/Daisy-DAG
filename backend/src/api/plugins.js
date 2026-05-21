@@ -34,13 +34,34 @@ router.get("/",
       // (enabled, source, health) from the DB so the admin Plugins
       // page can render rich rows without joining client-side.
       const inMem = new Map(registry.list().map(p => [p.name, p]));
+      // category + deprecated come from the 032 migration. We
+      // SELECT them defensively (COALESCE) so a worker that
+      // booted before 032 ran still returns the field shape the
+      // UI expects (NULL category, deprecated=false).
       const { rows } = await pool.query(
         `SELECT name, version, transport_kind AS transport, endpoint,
                 enabled, source, status, last_health_at, last_error,
+                category,
+                COALESCE(deprecated, false) AS deprecated,
                 installed_at, updated_at
            FROM plugins
           ORDER BY name`,
-      ).catch(() => ({ rows: [] }));
+      ).catch(async (e) => {
+        // 42703 = column "category" or "deprecated" missing —
+        // pre-032 schema. Drop them from the projection and
+        // synthesize null/false so the response shape is stable.
+        if (e?.code === "42703") {
+          const r2 = await pool.query(
+            `SELECT name, version, transport_kind AS transport, endpoint,
+                    enabled, source, status, last_health_at, last_error,
+                    installed_at, updated_at
+               FROM plugins
+              ORDER BY name`,
+          );
+          return { rows: r2.rows.map(r => ({ ...r, category: null, deprecated: false })) };
+        }
+        return { rows: [] };
+      });
       const out = rows.map(r => ({
         ...inMem.get(r.name),
         ...r,

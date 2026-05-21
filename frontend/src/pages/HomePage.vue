@@ -30,7 +30,7 @@
         <q-img
          :src="$q.dark.isActive ? '/dag_logo_dark.png' : '/dag_logo_light.png'"
           style="width: 28px; height: 28px;" class="q-mr-sm" />
-        <q-toolbar-title>DAISY Workflow Engine</q-toolbar-title>
+        <q-toolbar-title>Daisy AI Orchestrator</q-toolbar-title>
         <q-space />
         <!-- Centralised Ask Agent button. Opens a full-screen chat
              that can produce workflows, agents, and plugins from one

@@ -21,6 +21,7 @@ import {
 
 export default {
   name: "sql.execute",
+  category: "enterprise",
   description:
     "Run any parameterised SQL statement against a stored database " +
     "configuration — handy for CALL stored_proc(…), SELECT * FROM fn(…), " +

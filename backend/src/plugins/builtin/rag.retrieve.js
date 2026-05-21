@@ -32,6 +32,7 @@ import { retrieve } from "../../rag/ingest.js";
 
 export default {
   name: "rag.retrieve",
+  category: "ai",
   description:
     "Search a Knowledge Base by semantic similarity. Returns the top-K " +
     "matching chunks plus a concatenated `context` string ready to drop " +

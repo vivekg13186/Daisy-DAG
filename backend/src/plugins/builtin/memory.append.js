@@ -11,6 +11,7 @@ import { appendKv } from "../../engine/memoryStore.js";
 
 export default {
   name: "memory.append",
+  category: "engine",
   description:
     "Append an item to a JSON array stored under a memory key. " +
     "Useful for event logs, accumulating audit trails, etc.",
